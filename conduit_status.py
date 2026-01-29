@@ -34,6 +34,7 @@ def parse_to_bytes(s):
     if not match: return 0.0
     num = float(match.group(1))
     unit = s.upper()
+    if 'TB' in unit: return num * 1024**4
     if 'GB' in unit: return num * 1024**3
     if 'MB' in unit: return num * 1024**2
     if 'KB' in unit: return num * 1024
@@ -102,8 +103,8 @@ def get_conduit_status(server):
 
             result["status"] = get_last(r"Status:\s*(\w+)", clean)
             result["clients"] = get_last(r"Clients:\s*(\d+)", clean)
-            result["upload"] = get_last(r"Upload:\s*([\d\.]+ [GMK]?B)", clean)
-            result["download"] = get_last(r"Download:\s*([\d\.]+ [GMK]?B)", clean)
+            result["upload"] = get_last(r"Upload:\s*([\d\.]+ [TGMK]?B)", clean)
+            result["download"] = get_last(r"Download:\s*([\d\.]+ [TGMK]?B)", clean)
             result["uptime"] = get_last(r"Uptime:\s*([\dhm\s]+s)", clean)
             
             m_max = re.search(r"Max Clients:\s*(\d+)", clean, re.IGNORECASE)

@@ -23,14 +23,13 @@ This repository provides a suite of tools designed for Windows users to deploy, 
 
 1. **Download Python:** Visit [python.org/downloads](https://www.python.org/downloads) and download the latest version for Windows. Install with default parameters, ensuring you check the box **"Add Python to PATH."**
 2. **Open PowerShell:** Type `cmd` in your Windows search bar and press Enter to open the Command Prompt.
-3. **Navigate and Verify:**
    ```powershell
    cd C:\Conduit
-   dir
-      
-   py -m ensurepip --upgrade
+   
+3. **Install Required Packages:** type each of the following commands sequentially and press Enter
 
-   Install Required Packages:
+   ```powershell      
+   py -m ensurepip --upgrade
 
    py -m pip install fabric paramiko
    ```
@@ -53,6 +52,22 @@ For batch deployment, create a file named ip.txt in the C:\Conduit folder. Add o
    ```
 ---
 
+## Management
+
+The `conduit_manager_windows.py` script allows you to check status, stop, start, restart, or reset the service. Sometime even after few hours you have no clients; in that case, you might reset the conduit to get fresh keys and likely get clients.
+   ```powershell
+   py conduit_manager_windows.py
+   ```
+
+### Using servers.txt
+For the Management and Monitoring scripts to work with multiple servers, create a `servers.txt` file in the same directory. Please keep the header in top row. default port is 22.
+
+**Format:**
+`name,hostname,port,username`
+
+**Example:**
+`MyServer,123.45.67.89,22,root`
+
 ## Monitoring
 
 After installation, the Psiphon network requires time for vetting and propagation. This can take anywhere from a few minutes to several hours.
@@ -69,22 +84,6 @@ Customization: To change the interval, edit CHECK_INTERVAL_SECONDS (line 14) in 
 
 ---
 
-## Management
-
-The `conduit_manager_windows.py` script allows you to check status, stop, start, restart, or reset the service. Sometime even after few hours you have no clients; in that case, you might reset the conduit to get fresh keys and likely get clients.
-   ```powershell
-   py conduit_manager_windows.py
-   ```
-
-### Using servers.txt
-For the Management and Monitoring scripts to work with multiple servers, create a `servers.txt` file in the same directory. Please keep the header in top row.
-
-**Format:**
-`name,hostname,port,username,password`
-
-**Example:**
-`MyServer,123.45.67.89,22,root,Password123`
-
 ## Troubleshooting
 
 | Issue | Potential Cause | Solution |
@@ -97,8 +96,14 @@ For the Management and Monitoring scripts to work with multiple servers, create 
 * **SSH Port:** These scripts use the standard **SSH Port 22** for all connections.
 * **Security Warning:** The `servers.txt` file contains plain-text passwords. **DO NOT** upload this file to GitHub.
 
-
 ---
+
+## Credits & Acknowledgments
+
+This deployment suite is designed for use with the **Conduit** binary provided by [ssmirr](https://github.com/ssmirr/conduit).
+
+* **Binary Source:** [ssmirr/conduit](https://github.com/ssmirr/conduit)
+* **Upstream Project:** Based on the original [Psiphon Conduit](https://github.com/Psiphon-Labs/psiphon-conduit) by Psiphon Labs.
 
 ---
 
