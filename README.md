@@ -10,37 +10,17 @@ This repository provides a suite of tools designed for Windows users to deploy, 
    * `deploy_conduit_multi_server.py`
    * `conduit_status.py`
    * `conduit_manager.py`
+   * `setup_conduit.bat`
    
-## SSH Genetaion
-2. **Open PowerShell:** Type `cmd` in your Windows search bar and press Enter to open the Command Prompt.
-   ```powershell
-   mkdir .ssh
-   cd .ssh
-   ssh-keygen -t ed25519 -f id_conduit
-   exit
-
-## Python Installation
-
-1. **Download Python:** Visit [python.org/downloads](https://www.python.org/downloads) and download the latest version for Windows. Install with default parameters, ensuring you check the box **"Add Python to PATH."**
-2. **Open PowerShell:** Type `cmd` in your Windows search bar and press Enter to open the Command Prompt.
-   ```powershell
-   cd C:\Conduit
-   
-3. **Install Required Packages:** type each of the following commands sequentially and press Enter
-
-   ```powershell      
-   py -m ensurepip --upgrade
-
-   py -m pip install fabric paramiko
-   ```
+## SSH Genetaion and Python Installation
+**Setup:** From the Conduit folder double click on `setup_conduit.bat`. This will generate ssh keys in .ssh folder in user home folder.
 
 ---
-
 
 ## Conduit Deployment
 
 ### Single Server
-Run the following command to deploy to a single target. You will be prompted for the IP address and root password:
+Within the cmd terminal run the following command to deploy to a single target. You will be prompted for the IP address and root password:
    ```powershell
    py deploy_conduit_single_server.py
    ```
