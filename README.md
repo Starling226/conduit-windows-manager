@@ -13,7 +13,7 @@ This repository provides a suite of tools designed for Windows users to deploy, 
    * `setup_conduit.bat`
    
 ## SSH Genetaion and Python Installation
-**Setup:** From the Conduit folder double click on `setup_conduit.bat`. This will generate ssh keys in .ssh folder in user home folder.
+**Setup:** From the Conduit folder double click on `setup_conduit.bat`. This will generate ssh keys in .ssh folder in user home folder and install the required python packages.
 
 ---
 
