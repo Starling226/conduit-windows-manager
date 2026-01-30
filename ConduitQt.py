@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import platform
 import statistics
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,7 +11,15 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QFileDialog, QMessageBox, QFrame, QAbstractItemView, 
                              QRadioButton, QButtonGroup, QDialog, QFormLayout)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
 from fabric import Connection, Config
+
+# --- PLATFORM SPECIFIC FIXES ---
+if platform.system() == "Darwin":  # Darwin is the internal name for macOS
+    # Fix for tiny fonts on Retina displays
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    print("[INFO] macOS High-DPI Scaling Enabled")
 
 # --- 1. Dialog for Add/Edit (Compact Design) ---
 class ServerDialog(QDialog):
@@ -486,7 +495,31 @@ class ConduitGUI(QMainWindow):
 
 
         self.console = QPlainTextEdit(); self.console.setReadOnly(True)
-        self.console.setStyleSheet("background: #1e1e1e; color: #00ff00; font-family: Consolas;")
+#        self.console.setStyleSheet("background: #1e1e1e; color: #00ff00; font-family: Consolas;")
+
+        # 1. Set the Colors (Dark background, Green text)
+        self.console.setStyleSheet("background-color: #1e1e1e; color: #00ff00;")
+        
+        # 2. Set the Font dynamically based on OS
+        font = QFont()
+        sys_name = platform.system()
+        
+        if sys_name == "Darwin":    # macOS
+            font.setFamily("Menlo") # Standard Mac high-res mono font
+            font.setPointSize(12)
+        elif sys_name == "Windows": # Windows
+            font.setFamily("Consolas")
+            font.setPointSize(10)
+        else:                       # Linux
+            font.setFamily("Monospace")
+            font.setPointSize(10)
+            
+        # This is the "Magic" line that forces perfect table alignment
+        font.setStyleHint(QFont.Monospace)
+        font.setFixedPitch(True)
+        
+        self.console.setFont(font)
+
         layout.addWidget(self.console)
 
         # Connection Slots

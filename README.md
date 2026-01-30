@@ -1,11 +1,11 @@
-# Psiphon Conduit Setup for Windows and Linux
+# Psiphon Conduit Crossplatform Setup for Windows , Linux, and macOS
 
-This repository provides a suite of tools designed for Windows users to deploy, monitor, and manage **Psiphon Conduit** on remote Linux servers.
+This repository provides a suite of tools designed for users to deploy, monitor, and manage **Psiphon Conduit** on remote Linux servers.
 
 ## Download and Preparations
 1. **Python Instalation:** Please visist https://www.python.org/downloads/ and install the latest python
 
-2. **Create Directory:** Create a folder named `Conduit` in your `C:\` partition in Windows or /opt/conduit in Linux environment.
+2. **Create Directory:** Create a folder named `Conduit` in your `C:\` partition in Windows or /opt/conduit in Linux and macOS environments.
 3. **Download Scripts:** Save the following scripts into `C:\Conduit` or /opt/conduit:
    * `deploy_conduit_single_server.py`
    * `deploy_conduit_multi_server.py`
@@ -21,7 +21,7 @@ This repository provides a suite of tools designed for Windows users to deploy, 
 
 ## Conduit Deployment
 ### Running Ineractive GUI
-The interactive GUI `ConduitQt.py` is a cross platform designed using PyQt5 and has been tested in Windows and Linux Environmnets.  It is designed to do everything you need, to deploy a conduit server, manage and monitor the current status of the server. GUI is self explanatory. You can add new servers and delete your existing servers from a text file names servers.txt. To do the opration simply move one or a group of of the server to list on the right, select them and start doing the operation. When Apply Config Changes is cheked, you can press Start or restart to update the conduit parameters. The rest of the script are invidual applications you can run them for similar funtionalities in Windows.
+The interactive GUI `ConduitQt.py` is a cross platform designed using PyQt5 and has been tested in Windows, Linux, and macOS Environmnets.  It is designed to do everything you need, to deploy a conduit server, manage and monitor the current status of the server. GUI is self explanatory. You can add new servers and delete your existing servers from a text file names servers.txt. To do the opration simply move one or a group of of the server to list on the right, select them and start doing the operation. When Apply Config Changes is cheked, you can press Start or restart to update the conduit parameters. The rest of the script are invidual applications you can run them for similar funtionalities in Windows.
 
 ### Screenshot of the Conduit Manager Qt Application
 
@@ -88,7 +88,12 @@ Customization: To change the interval, edit CHECK_INTERVAL_SECONDS (line 14) in 
 | **Connection Timeout** | Firewall is blocking Port 22. | Ensure Port 22 is open in your VPS cloud firewall. |
 | **Authentication Failed** | Incorrect password or root disabled. | Ensure `PermitRootLogin yes` is set in `/etc/ssh/sshd_config`. |
 | **Permission Denied** | Not logged in as root. | Non-Status actions (Start/Stop/Reset) require root access. |
+| **Architecture Mismatch** | If you are using a modern Mac with an M1, M2, or M3 chip (Apple Silicon), and you run into issues installing PyQt5, you might need to install it via Homebrew instead of pip|
 
+   ```bash
+   brew install pyqt@5
+   ```
+   
 ## Important Notes
 * **SSH Port:** These scripts use the standard **SSH Port 22** for all connections.
 * **Security Warning:** The `servers.txt` file contains plain-text passwords. **DO NOT** upload this file to GitHub.

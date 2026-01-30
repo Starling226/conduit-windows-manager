@@ -1,11 +1,13 @@
 #!/bin/bash
 
+# Detect Operating System
+OS_TYPE="$(uname)"
+echo "[*] Detecting OS: $OS_TYPE"
+
 # Step 1: Change to user home directory
 cd "$HOME" || exit
 
 # Step 2: Ensure pip is updated and install dependencies
-# We use python3 on Linux. We also add 'python3-pip' reminder 
-# as some Linux distros don't include it by default.
 echo "[*] Updating pip and installing dependencies..."
 python3 -m pip install --upgrade pip
 python3 -m pip install fabric paramiko PyQt5
@@ -18,7 +20,6 @@ fi
 
 cd .ssh || exit
 
-# Generate key only if it doesn't exist to avoid overwriting
 if [ ! -f "id_conduit" ]; then
     echo "[*] Generating SSH key: id_conduit"
     ssh-keygen -t ed25519 -f id_conduit -N ""
@@ -26,18 +27,18 @@ else
     echo "[!] id_conduit already exists. Skipping keygen."
 fi
 
-# Step 4: Conditional Directory Change
-# Linux doesn't have C:\, so we check for /opt/conduit or a local folder
-if [ -d "/opt/conduit" ]; then
-    cd "/opt/conduit" || exit
-    echo "[*] Moved to /opt/conduit"
-elif [ -d "$HOME/Conduit" ]; then
-    cd "$HOME/Conduit" || exit
-    echo "[*] Moved to $HOME/Conduit"
-else
-    echo ""
-    echo "[NOTICE] Conduit directory not found. Staying in $(pwd)"
+# Step 4: Add macOS specific fixes to the Python script if needed
+if [ "$OS_TYPE" == "Darwin" ]; then
+    echo "[*] macOS detected. Adding High-DPI support check..."
+    # Note: This logic can be added to the top of your ConduitQt.py
 fi
 
-# Step 5: Hand over control (Keep the terminal open)
+# Step 5: Directory Check
+if [ -d "/opt/conduit" ]; then
+    cd "/opt/conduit" || exit
+elif [ -d "$HOME/Conduit" ]; then
+    cd "$HOME/Conduit" || exit
+fi
+
+echo "[SUCCESS] Environment ready. Launching shell..."
 exec $SHELL
