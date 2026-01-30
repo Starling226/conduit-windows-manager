@@ -88,7 +88,7 @@ Customization: To change the interval, edit CHECK_INTERVAL_SECONDS (line 14) in 
 | **Connection Timeout** | Firewall is blocking Port 22. | Ensure Port 22 is open in your VPS cloud firewall. |
 | **Authentication Failed** | Incorrect password or root disabled. | Ensure `PermitRootLogin yes` is set in `/etc/ssh/sshd_config`. |
 | **Permission Denied** | Not logged in as root. | Non-Status actions (Start/Stop/Reset) require root access. |
-| **Architecture Mismatch** | If you are using a modern Mac with an M1, M2, or M3 chip (Apple Silicon), and you run into issues installing PyQt5, you might need to install it via Homebrew instead of pip|
+| **Architecture Mismatch** | you are using a modern Mac with an M1, M2, or M3 chip (Apple Silicon), and you run into issues installing PyQt5| you might need to install it via Homebrew instead of pip|
 
    ```bash
    brew install pyqt@5
