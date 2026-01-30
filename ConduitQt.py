@@ -3,6 +3,7 @@ import os
 import re
 import platform
 import statistics
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -435,6 +436,7 @@ class ConduitGUI(QMainWindow):
         self.server_data = [] 
         self.current_path = ""
         self.init_ui()
+        self.check_initial_file()
 
     def init_ui(self):
         central = QWidget(); self.setCentralWidget(central)
@@ -805,20 +807,72 @@ class ConduitGUI(QMainWindow):
             self.sel.takeItem(self.sel.row(it))
         self.pool.sortItems()
 
+    def is_valid_ip(self, ip_str):
+        try:
+            ipaddress.ip_address(ip_str.strip())
+            return True
+        except ValueError:
+            return False
+
     def add_srv(self):
-        if not self.current_path: return
         dlg = ServerDialog(self)
         if dlg.exec_() == QDialog.Accepted:
             d = dlg.get_data()
-            self.server_data.append(d); self.pool.addItem(self.create_item(d))
-            self.save(); self.pool.sortItems()
+            
+            # Extract and trim values
+            name = d.get('name', '').strip()
+            ip = d.get('ip', '').strip()
+            port = d.get('port', '').strip()
+
+            # 1. Validate Name
+            if not name:
+                QMessageBox.critical(self, "Invalid Name", "Server Name cannot be empty.")
+                return
+            
+            # Check for commas as they would break your CSV servers.txt format
+            if ',' in name:
+                QMessageBox.critical(self, "Invalid Name", "Server Name cannot contain commas.")
+                return
+
+            # 2. Validate IP
+            if not self.is_valid_ip(ip):
+                QMessageBox.critical(self, "Invalid IP", f"'{ip}' is not a valid IP address.")
+                return
+
+            # 3. Validate Port
+            try:
+                port_num = int(port)
+                if not (1 <= port_num <= 65535):
+                    raise ValueError
+            except ValueError:
+                QMessageBox.critical(self, "Invalid Port", "Port must be a number between 1 and 65535.")
+                return
+
+            # If all checks pass:
+            self.server_data.append(d)
+            self.pool.addItem(self.create_item(d))
+            self.save()
+            self.pool.sortItems()
+            self.console.appendPlainText(f"[OK] Added server: {name}")
 
     def save(self):
-        if not self.current_path: return
-        with open(self.current_path, 'w') as f:
-            f.write("name, ip, port, user, password\n")
-            for s in self.server_data:
-                f.write(f"{s['name']}, {s['ip']}, {s['port']}, {s['user']}, {s['pass']}\n")
+        if not self.current_path: 
+            # If path is missing, default to servers.txt so saving works
+            self.current_path = "servers.txt"
+        
+        # Update the UI label to show the filename
+        # This fixes the "No file loaded" issue immediately after adding the first server
+        self.lbl_path.setText(f"File: {os.path.basename(self.current_path)}")
+
+        try:
+            with open(self.current_path, 'w') as f:
+                f.write("name, ip, port, user, password\n")
+                for s in self.server_data:
+                    # Using .get() prevents crashes if a key is missing
+                    f.write(f"{s.get('name','')}, {s.get('ip','')}, {s.get('port','')}, {s.get('user','')}, {s.get('pass','')}\n")
+            self.console.appendPlainText(f"[OK] Changes saved to {self.current_path}")
+        except Exception as e:
+            self.console.appendPlainText(f"[ERROR] Save failed: {e}")
 
     def run_worker(self, action):
         """
@@ -848,6 +902,42 @@ class ConduitGUI(QMainWindow):
         self.worker = ServerWorker(action, targets, conf)
         self.worker.log_signal.connect(lambda m: self.console.appendPlainText(m))
         self.worker.start()
+
+    def check_initial_file(self):
+        # We define our standard filename
+        filename = "servers.txt"
+        self.current_path = filename 
+
+        if os.path.exists(filename):
+            self.lbl_path.setText(f"File: {filename}")
+            self.console.appendPlainText(f"[INFO] Found '{filename}' in current directory. Importing...")
+            self.load_from_file(filename)
+        else:
+            self.lbl_path.setText("File: servers.txt (New)")
+            self.console.appendPlainText("[NOTICE] No 'servers.txt' found. Your first server will create this file.")
+
+    def load_from_file(self, path):
+        try:
+            with open(path, 'r') as f:
+                lines = f.readlines()
+                # Skip header if it exists
+                start_idx = 1 if lines and "name," in lines[0] else 0
+                
+                for line in lines[start_idx:]:
+                    if not line.strip(): continue
+                    parts = [p.strip() for p in line.split(',')]
+                    if len(parts) >= 5:
+                        d = {
+                            'name': parts[0], 'ip': parts[1], 
+                            'port': parts[2], 'user': parts[3], 'pass': parts[4]
+                        }
+                        self.server_data.append(d)
+                        self.pool.addItem(self.create_item(d))
+            
+            self.pool.sortItems()
+            self.console.appendPlainText(f"[SUCCESS] {len(self.server_data)} servers imported.")
+        except Exception as e:
+            self.console.appendPlainText(f"[ERROR] Could not read file: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv); gui = ConduitGUI(); gui.show(); sys.exit(app.exec_())
