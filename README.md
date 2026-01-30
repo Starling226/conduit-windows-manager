@@ -93,7 +93,19 @@ Customization: To change the interval, edit CHECK_INTERVAL_SECONDS (line 14) in 
    ```bash
    brew install pyqt@5
    ```
-   
+## Features Note
+* **Add server:** Use Add Server(+) if you have not added any server yet. You can also use this later to add further servers.
+* **Delete server:** Use Delete Server if you no longer needed.
+* **Deploy:** Select one or a number of servers in the right list and cick Deploy. This will deploy your server(s)
+* **Status:** Clicking on this dosplay the current status of your server(s), whether it is active or dead.
+* **Statistics:** This shows the network analytic
+* **Stop:** If you like to stop Conduit service, use this. You hardly need this.
+* **Start:** If Conduit service is not active, use this to start it.
+* **Re-Start:** If you want to chnage Conduit parameters, like Max Clients or Bandwidth, check Apply Config Changes Checkbox and click Re-start. You can also use this if yours server is not connect after couple of hours.
+* **Reset:** You can reset the Conduit config using this. In case if you have not received any client or you think you do not have more clients usually less than 50 for more than a day, you can reset the config. If after frew hours you have receieved any clients you can also reset the config.
+* **Display Name/IP:** Use this to siwtch the list to Server name or IP address.
+* **Max Clients:** As rule of thumb, each core should support 50-60 clients. So if you have 4 cores you can set it to 225. This will possibly gives you up to 200 clients.
+
 ## Important Notes
 * **SSH Port:** These scripts use the standard **SSH Port 22** for all connections.
 * **Security Warning:** The `servers.txt` file contains plain-text passwords. **DO NOT** upload this file to GitHub.
