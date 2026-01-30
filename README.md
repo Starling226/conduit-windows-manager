@@ -1,4 +1,4 @@
-# Psiphon Conduit Setup
+# Psiphon Conduit Setup for Windows and Linux
 
 This repository provides a suite of tools designed for Windows users to deploy, monitor, and manage **Psiphon Conduit** on remote Linux servers.
 

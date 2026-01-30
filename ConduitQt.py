@@ -263,7 +263,79 @@ class StatsWorker(QThread):
         if 'KB' in u: return num * 1024
         return num
 
+#    def strip_ansi(text):
+#        return re.compile(r'\x1b\[[0-9;]*[a-zA-Z]').sub('', text)
+
+    def format_bytes(self,b):
+        if b == 0: return "0 B"
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if b < 1024: return f"{b:.2f} {unit}"
+            b /= 1024
+        return f"{b:.2f} PB"
+
     def generate_table(self, results):
+        # 1. Main Table Generation (The header and server rows)
+        width = 83
+        head = f"│ {'Name/IP':<20} │ {'Clients':<7} │ {'Up':<9} │ {'Down':<9} │ {'Uptime':<14} │ {'Mbps':<6} │\n"
+        sep = "├" + "─"*22 + "┼" + "─"*9 + "┼" + "─"*11 + "┼" + "─"*11 + "┼" + "─"*16 + "┼" + "─"*8 + "┤\n"
+        
+        body = ""
+        valid_results = [r for r in results if r["success"]]
+        
+        for r in results:
+            status = "✓" if r["success"] else "✗"
+            body += f"│ {status} {r['label'][:18]:<18} │ {r['clients']:<7} │ {r['up']:<9} │ {r['down']:<9} │ {r['uptime']:<14} │ {r['mbps']:<6} │\n"
+        
+        main_table = f"┌" + "─"*width + "┐\n" + head + sep + body + "└" + "─"*width + "┘"
+
+        # 2. Analytics Summary Logic (Integrated from your script)
+        if not valid_results:
+            return main_table + "\n[!] No active data to calculate analytics."
+
+        # Set up timestamp for Iran Time (UTC+3:30)
+        ts = (datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
+        
+        total_clients = sum([int(r["clients"]) for r in valid_results if r["clients"].isdigit()])
+        
+        out = []
+        out.append(f"\n--- Analytics Summary (Iran Time: {ts}) ---")
+        out.append(f"Total number of Clients across all servers: {total_clients}\n")
+        
+        # Header for the Metric Table
+        out.append(f"{'Metric':<12} │ {'Mean':<12} │ {'Median':<12} │ {'Min':<12} │ {'Max':<12}")
+        sep_line = f"{'─'*13}┼{'─'*14}┼{'─'*14}┼{'─'*14}┼{'─'*14}"
+        out.append(sep_line)
+
+        # Stat Row Helper function
+        def get_stat_row(label, data_list, is_bytes=False):
+            if not data_list: return ""
+            avg_val = statistics.mean(data_list)
+            med_val = statistics.median(data_list)
+            min_val = min(data_list)
+            max_val = max(data_list)
+            
+            if is_bytes:
+                return f"{label:<12} │ {self.format_bytes(avg_val):<12} │ {self.format_bytes(med_val):<12} │ {self.format_bytes(min_val):<12} │ {self.format_bytes(max_val):<12}"
+            if label == "Clients":
+                return f"{label:<12} │ {int(round(avg_val)):<12} │ {int(round(med_val)):<12} │ {int(min_val):<12} │ {int(max_val):<12}"
+            # Avg Mbps
+            return f"{label:<12} │ {avg_val:<12.2f} │ {med_val:<12.2f} │ {min_val:<12.2f} │ {max_val:<12.2f} Mbps"
+
+        # Data extraction for the Metric table
+        clients_list = [int(r["clients"]) for r in valid_results if str(r["clients"]).isdigit()]
+        ups = [self.parse_to_bytes(r["up"]) for r in valid_results]
+        downs = [self.parse_to_bytes(r["down"]) for r in valid_results]
+        mbps_list = [r["mbps_val"] for r in valid_results]
+
+        # Append the calculated rows
+        out.append(get_stat_row("Clients", clients_list))
+        out.append(get_stat_row("Upload", ups, True))
+        out.append(get_stat_row("Download", downs, True))
+        out.append(get_stat_row("Avg Mbps", mbps_list))
+
+        return main_table + "\n" + "\n".join(out)
+
+    def generate_table2(self, results):
         # Slightly wider name column for Linux paths/long names
         head = f"│ {'Name/IP':<20} │ {'Clients':<7} │ {'Up':<9} │ {'Down':<9} │ {'Uptime':<14} │ {'Mbps':<6} │\n"
         sep = "├" + "─"*20 + "┼" + "─"*9 + "┼" + "─"*11 + "┼" + "─"*11 + "┼" + "─"*16 + "┼" + "─"*8 + "┤\n"
