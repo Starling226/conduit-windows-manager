@@ -5,7 +5,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QLabel, QLineEdit, 
+                             QHBoxLayout, QPushButton, QLabel, QLineEdit, QInputDialog,
                              QCheckBox, QListWidget, QListWidgetItem, QPlainTextEdit, 
                              QFileDialog, QMessageBox, QFrame, QAbstractItemView, 
                              QRadioButton, QButtonGroup, QDialog, QFormLayout)
@@ -140,17 +140,17 @@ class ServerWorker(QThread):
                 
                 if self.action == "stop":
                     c.sudo("systemctl stop conduit", hide=True)
-                    return f"[-] [{name}] Stopped."
+                    return f"[-] {s['name']} Stopped."
 
                 if self.action in ["start", "restart"]:
-                    if self.config_data['update']:
-                        exec_cmd = f"/opt/conduit/conduit start --max-clients {self.config_data['clients']} --bandwidth {self.config_data['bw']} --data-dir /var/lib/conduit"
+                    if self.config['update']:
+                        exec_cmd = f"/opt/conduit/conduit start --max-clients {self.config['clients']} --bandwidth {self.config['bw']} --data-dir /var/lib/conduit"
                         sed_cmd = f"sed -i 's|^ExecStart=.*|ExecStart={exec_cmd}|' {service_file}"
                         c.sudo(sed_cmd, hide=True)
                         c.sudo("systemctl daemon-reload", hide=True)
                     
                     c.sudo(f"systemctl {self.action} conduit", hide=True)
-                    return f"[+] [{name}] {self.action.capitalize()}ed."
+                    return f"[+] {s['name']} {self.action.capitalize()}ed."
 
                 # ... (rest of the start/stop/restart logic using run_cmd)
                 
@@ -277,116 +277,73 @@ class StatsWorker(QThread):
         w = 83
         return f"┌" + "─"*w + "┐\n" + head + sep + body + "└" + "─"*w + "┘\nTOTAL CLIENTS: " + str(total_c)
 
-class StatsWorker_windows(QThread):
-    finished_signal = pyqtSignal(str)
+class DeployWorker(QThread):
+    log_signal = pyqtSignal(str)
 
-    def __init__(self, targets, display_mode):
+    def __init__(self, targets, params):
         super().__init__()
         self.targets = targets
-        self.display_mode = display_mode # 'name' or 'ip'
-
-    def parse_to_bytes(self, s):
-        if not s or "N/A" in s: return 0.0
-        match = re.search(r'([\d\.]+)', s)
-        if not match: return 0.0
-        num = float(match.group(1))
-        unit = s.upper()
-        if 'TB' in unit: return num * 1024**4
-        if 'GB' in unit: return num * 1024**3
-        if 'MB' in unit: return num * 1024**2
-        if 'KB' in unit: return num * 1024
-        return num
+        self.params = params # password, max_clients, bandwidth, user
 
     def run(self):
-        results = []
-        # Increased workers for faster batch processing
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            futures = [executor.submit(self.get_stats, s) for s in self.targets]
+        # Read the public key once
+        home = os.path.expanduser("~")
+        pub_key_path = os.path.join(home, ".ssh", "id_conduit.pub")
+        
+        if not os.path.exists(pub_key_path):
+            self.log_signal.emit(f"[ERROR] Public key not found at: {pub_key_path}")
+            return
+
+        with open(pub_key_path, "r") as f:
+            pub_key_content = f.read().strip()
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(self.deploy_task, s, pub_key_content) for s in self.targets]
             for f in as_completed(futures):
-                results.append(f.result())
-        
-        # Sort by Mbps descending
-        results = sorted(results, key=lambda x: x.get('mbps_val', 0), reverse=True)
-        report = self.generate_table(results)
-        self.finished_signal.emit(report)
+                self.log_signal.emit(f.result())
 
-    def get_stats(self, s):
-        # Determine display name based on Radio Button
-        display_label = s['name'] if self.display_mode == 'name' else s['ip']
-        
-        res = {
-            "label": display_label, 
-            "success": False, 
-            "clients": "0", 
-            "up": "0B", 
-            "down": "0B", 
-            "uptime": "N/A", 
-            "mbps": "0.00", 
-            "mbps_val": 0.0
-        }
-        
+    def deploy_task(self, s, pub_key):
         try:
-            home = os.path.expanduser("~")
-            # Ensure we try your specific conduit key
-            key_path = os.path.join(home, ".ssh", "id_conduit")
-            
-            connect_kwargs = {"timeout": 10, "look_for_keys": True}
-            if os.path.exists(key_path):
-                connect_kwargs["key_filename"] = key_path
-            if s['pass']:
-                connect_kwargs["password"] = s['pass']
+            config = Config(overrides={'run': {'pty': True}, 'timeouts': {'connect': 20}})
+            conn_params = {
+                "password": self.params['password'],
+                "look_for_keys": False,
+                "allow_agent": False
+            }
 
-            with Connection(host=s['ip'], user=s['user'], port=int(s['port']), connect_kwargs=connect_kwargs) as conn:
-                # Get the status from the server
-                result = conn.run("/opt/conduit/conduit service status -f", hide=True, timeout=15)
-                raw_out = result.stdout
-                clean = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]').sub('', raw_out)
+            with Connection(host=s['ip'], user=self.params['user'], port=int(s['port']), 
+                            connect_kwargs=conn_params, config=config) as conn:
                 
-                res["success"] = True
-                # Use Regex to extract values
-                res["clients"] = (re.findall(r"Clients:\s*(\d+)", clean) or ["0"])[-1]
-                res["up"] = (re.findall(r"Upload:\s*([\d\.]+ [TGMK]?B)", clean) or ["0B"])[-1]
-                res["down"] = (re.findall(r"Download:\s*([\d\.]+ [TGMK]?B)", clean) or ["0B"])[-1]
+                # 1. Key Injection
+                conn.run("mkdir -p ~/.ssh && chmod 700 ~/.ssh", hide=True)
+                conn.run(f'echo "{pub_key}" >> ~/.ssh/authorized_keys', hide=True)
+                conn.run("chmod 600 ~/.ssh/authorized_keys", hide=True)
+
+                # 2. Cleanup & Install Dependencies
+                conn.run("systemctl stop conduit", warn=True, hide=True)
+                conn.run("rm -f /opt/conduit/conduit", warn=True, hide=True)
+                conn.run("mkdir -p /opt/conduit", hide=True)
+
+                pkg_cmd = "dnf install wget firewalld curl -y" if conn.run("command -v dnf", warn=True, hide=True).ok else "apt-get update -y && apt-get install wget firewalld curl -y"
+                conn.run(pkg_cmd, hide=True)
+
+                # 3. Download & Install Binary
+                url = "https://github.com/ssmirr/conduit/releases/download/e421eff/conduit-linux-amd64"
+                conn.run(f"curl -L -o /opt/conduit/conduit {url}", hide=True)
+                conn.run("chmod +x /opt/conduit/conduit")
+                conn.run("/opt/conduit/conduit service install", hide=True)
+
+                # 4. Configure Service
+                svc = "/etc/systemd/system/conduit.service"
+                cmd = f"/opt/conduit/conduit start --max-clients {self.params['clients']} --bandwidth {self.params['bw']} --data-dir /var/lib/conduit"
+                conn.run(f"sed -i 's|^ExecStart=.*|ExecStart={cmd}|' {svc}")
                 
-                # Extract Uptime (e.g., 2h 15m 10s)
-                uptime_match = re.search(r"Uptime:\s*([\dhm\s]+s)", clean)
-                if uptime_match:
-                    res["uptime"] = uptime_match.group(1).strip()
+                # 5. Start
+                conn.run("systemctl daemon-reload && systemctl enable conduit && systemctl start conduit", hide=True)
                 
-                # Calculate Mbps
-                d_bytes = self.parse_to_bytes(res["down"])
-                uptime_str = res["uptime"]
-                
-                # Convert uptime string to total seconds for math
-                h = int(re.search(r'(\d+)h', uptime_str).group(1)) if 'h' in uptime_str else 0
-                m = int(re.search(r'(\d+)m', uptime_str).group(1)) if 'm' in uptime_str else 0
-                s_sec = int(re.search(r'(\d+)s', uptime_str).group(1)) if 's' in uptime_str else 0
-                total_sec = (h * 3600) + (m * 60) + s_sec
-                
-                if total_sec > 0:
-                    mbps = (d_bytes * 8) / total_sec / 10**6
-                    res["mbps_val"] = mbps
-                    res["mbps"] = f"{mbps:.2f}"
+                return f"[OK] {s['ip']} successfully deployed."
         except Exception as e:
-            res["uptime"] = "Offline"
-        return res
-
-    def generate_table(self, results):
-        # Adjusted widths for Uptime column
-        head = f"│ {'Name/IP':<18} │ {'Clients':<7} │ {'Up':<9} │ {'Down':<9} │ {'Uptime':<12} │ {'Mbps':<6} │\n"
-        sep = "├" + "─"*20 + "┼" + "─"*9 + "┼" + "─"*11 + "┼" + "─"*11 + "┼" + "─"*14 + "┼" + "─"*8 + "┤\n"
-        body = ""
-        total_c = 0
-        
-        for r in results:
-            status_char = "✓" if r["success"] else "✗"
-            name_trunc = r['label'][:16]
-            body += f"│ {status_char} {name_trunc:<16} │ {r['clients']:<7} │ {r['up']:<9} │ {r['down']:<9} │ {r['uptime']:<12} │ {r['mbps']:<6} │\n"
-            if r["success"]: total_c += int(r["clients"])
-        
-        width = 81
-        footer = f"\nTOTAL CLIENTS: {total_c} | TIME: {datetime.now().strftime('%H:%M:%S')}"
-        return f"┌" + "─"*width + "┐\n" + head + sep + body + "└" + "─"*width + "┘" + footer
+            return f"[ERROR] {s['ip']} failed: {str(e)}"
 
 # --- 3. Main GUI Window ---
 class ConduitGUI(QMainWindow):
@@ -411,10 +368,10 @@ class ConduitGUI(QMainWindow):
 
         cfg_frame = QFrame(); cfg_frame.setFrameShape(QFrame.StyledPanel)
         cfg_lay = QHBoxLayout(cfg_frame)
-        cfg_lay.addWidget(QLabel("Max Clients:")); self.in_clients = QLineEdit("225")
-        cfg_lay.addWidget(self.in_clients)
-        cfg_lay.addWidget(QLabel("Max Bandwidth:")); self.in_bw = QLineEdit("40.0")
-        cfg_lay.addWidget(self.in_bw)
+        cfg_lay.addWidget(QLabel("Max Clients:")); self.edit_clients = QLineEdit("225")
+        cfg_lay.addWidget(self.edit_clients)
+        cfg_lay.addWidget(QLabel("Max Bandwidth:")); self.edit_bw = QLineEdit("40.0")
+        cfg_lay.addWidget(self.edit_bw)
         self.chk_upd = QCheckBox("Apply Config Changes"); cfg_lay.addWidget(self.chk_upd)
         self.rad_name = QRadioButton("Display Name"); self.rad_ip = QRadioButton("Display IP")
         self.rad_name.setChecked(True); cfg_lay.addWidget(self.rad_name); cfg_lay.addWidget(self.rad_ip)
@@ -448,7 +405,10 @@ class ConduitGUI(QMainWindow):
         self.btn_stats = QPushButton("Statistics")
         self.btn_stats.setStyleSheet("background-color: #2c3e50; color: white; font-weight: bold;")
 
-        for b in [self.btn_start, self.btn_stop, self.btn_re, self.btn_reset, self.btn_stat, self.btn_stats, self.btn_quit]:
+        self.btn_deploy = QPushButton("Deploy")
+        self.btn_deploy.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold;")
+
+        for b in [self.btn_start, self.btn_stop, self.btn_re, self.btn_reset, self.btn_stat, self.btn_stats, self.btn_deploy, self.btn_quit]:
             ctrl_lay.addWidget(b)
         layout.addLayout(ctrl_lay)
 
@@ -472,8 +432,94 @@ class ConduitGUI(QMainWindow):
         self.btn_start.clicked.connect(lambda: self.confirm_action("start"))
         self.btn_stop.clicked.connect(lambda: self.confirm_action("stop"))
         self.btn_re.clicked.connect(lambda: self.confirm_action("restart"))
+        self.btn_stat.clicked.connect(lambda: self.run_worker("status"))
         self.btn_reset.clicked.connect(self.confirm_reset)
         self.btn_stats.clicked.connect(self.run_stats)
+        self.btn_deploy.clicked.connect(self.run_deploy)
+
+
+    def get_validated_inputs(self):
+        """Helper to validate and return clients and bandwidth."""
+        raw_clients = self.edit_clients.text().strip()
+        raw_bw = self.edit_bw.text().strip()
+
+        # 1. Validate Clients (Integer 1-500)
+        try:
+            # Convert to float first in case user typed "200.5", then to int
+            clients = int(float(raw_clients))
+            if not (1 <= clients <= 500):
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", 
+                                "Max Clients must be a whole number between 1 and 500.")
+            return None
+
+        # 2. Validate Bandwidth (Float 1-200)
+        try:
+            bw = float(raw_bw)
+            if not (1.0 <= bw <= 200.0):
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", 
+                                "Bandwidth must be a number between 1.0 and 200.0.")
+            return None
+
+        return {"clients": clients, "bw": bw}
+
+    def run_deploy(self):
+        targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
+        if not targets:
+            QMessageBox.warning(self, "Deployment", "No servers selected.")
+            return
+
+        # NEW: Run the validation check
+        validated = self.get_validated_inputs()
+        if not validated:
+            return  # Stop here if validation failed
+
+        # Existing Warning Message...
+        warning_text = (
+            "WARNING: PRE-EXISTING INSTALLATION DETECTED?\n\n"
+            "If these are existing Conduit servers, this process will:\n"
+            "1. STOP the current conduit service.\n"
+            "2. REMOVE the existing conduit binary.\n"
+            "3. INSTALL a fresh copy as ROOT and reset the service configuration.\n\n"
+            f"Config: {validated['clients']} Clients | {validated['bw']} Mbps\n\n"
+            "Proceed only if you have the root password for these servers.\n"
+            "Are you absolutely sure you want to proceed?"
+        )
+        
+        reply = QMessageBox.critical(self, "Confirm Fresh Deployment", warning_text, 
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply != QMessageBox.Yes:
+            return
+
+        pwd, ok = QInputDialog.getText(self, "Root Authentication", "Enter Root Password:", QLineEdit.Password)
+        if not ok or not pwd:
+            return
+
+        params = {
+            "password": pwd,
+            "user": "root",
+            "clients": validated['clients'], 
+            "bw": validated['bw']            
+        }
+
+        # UI Feedback
+        self.btn_deploy.setEnabled(False)
+        self.btn_deploy.setText("Deploying...")
+        
+        self.console.appendPlainText(f"\n[>>>] INITIATING FRESH ROOT DEPLOYMENT ON {len(targets)} SERVER(S)...")
+        
+        self.deploy_thread = DeployWorker(targets, params)
+        self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
+        
+        # Reset button state when done
+        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
+        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
+        
+        self.deploy_thread.start()
 
     def run_stats(self):
         targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
@@ -685,11 +731,11 @@ class ConduitGUI(QMainWindow):
             return
 
         # Console Debug: Verify we have the right IPs before launching
-        self.console.appendPlainText(f"\n[DEBUG] Target IPs: {', '.join([t['ip'] for t in targets])}")
+        self.console.appendPlainText(f"\nTarget IPs: {', '.join([t['ip'] for t in targets])}")
         
         conf = {
-            "clients": self.in_clients.text(), 
-            "bw": self.in_bw.text(), 
+            "clients": self.edit_clients.text(), 
+            "bw": self.edit_bw.text(), 
             "update": self.chk_upd.isChecked()
         }
         

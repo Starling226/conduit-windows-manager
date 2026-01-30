@@ -19,6 +19,19 @@ This repository provides a suite of tools designed for Windows users to deploy, 
 ---
 
 ## Conduit Deployment
+### Running Ineractive GUI
+The interactive GUI `ConduitQt.py` is a cross platform designed using PyQt5 and has been tested in Windows and Linux Environmnets.  It is designed to do everything you need, to deploy a conduit server, manage and monitor the current status of the server. GUI is self explanatory. You can add new servers and delete your existing servers from a text file names servers.txt. To do the opration simply move one or a group of of the server to list on the right, select them and start doing the operation. When Apply Config Changes is cheked, you can press Start or restart to update the conduit parameters. The rest of the script are invidual applications you can run them for similar funtionalities in Windows.
+
+### Screenshot of the Conduit Manager Qt Application
+
+Here is the GUI interface for Conduit Management:
+
+![Conduit Management Interface](screenshots/ConduitQt1.png)
+*(Screenshot showing Conduit management)*
+
+![Conduit Management Interface](screenshots/ConduitQt2.png)
+*(Screenshot showing Conduit Statistics faeture)*
+
 ### Running Python Scripts
 To run any of the Python scripts simply double click on each file or run them in the command line terminal using the py command.
 
@@ -37,18 +50,10 @@ For batch deployment, create a file named ip.txt in the C:\Conduit folder. Add o
 
 ## Management
 
-The `ConduitQt.py` is a Qt desgined Gui that allows you add, remove, update the servers, check status, stop, start, restart, or reset the service interactively. When the Apply Config Chnages is cheked, you can press Start or restart to update the conduit parameters. This Gui is cross platform and works in Windows and Linux environments.
-
 The `conduit_manager_windows.py` script allows you to check status, stop, start, restart, or reset the service. Sometime even after few hours you have no clients; in that case, you might reset the conduit to get fresh keys and likely get clients.
    ```powershell
    py conduit_manager_windows.py
    ```
-### Screenshot of the Conduit Manager Qt Application
-
-Here is the GUI interface for Conduit Management:
-
-![Conduit Management Interface](screenshots/ConduitQt.png)
-*(Screenshot showing Conduit management)*
 
 ### Using servers.txt
 For the Management and Monitoring scripts to work with multiple servers, create a `servers.txt` file in the same directory. Please keep the header in top row. default port is 22.
