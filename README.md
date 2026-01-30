@@ -42,7 +42,7 @@ The `conduit_manager_windows.py` script allows you to check status, stop, start,
    ```powershell
    py conduit_manager_windows.py
    ```
-### Screenshot of the DefaceIT Qt-Edition Application
+### Screenshot of the Conduit Manager Qt Application
 
 Here is the GUI interface for Conduit Management:
 
