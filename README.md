@@ -46,7 +46,7 @@ The `conduit_manager_windows.py` script allows you to check status, stop, start,
 
 Here is the GUI interface for Conduit Management:
 
-![Conduit Management Interface](https://github.com/Starling226/conduit-windows-manager/blob/main/screenshots/ConduitQt.png)
+![Conduit Management Interface](https://raw.githubusercontent.com/Starling226/conduit-windows-manager/main/screenshots/ConduitQt.png)
 *(Screenshot showing Conduit management)*
 
 ### Using servers.txt
