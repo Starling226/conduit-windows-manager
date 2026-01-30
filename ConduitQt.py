@@ -1,5 +1,8 @@
 import sys
 import os
+import re
+import statistics
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QLineEdit, 
@@ -76,9 +79,9 @@ class ServerWorker(QThread):
             
             # List of potential private keys to try
             potential_keys = [
-                os.path.join(home, ".ssh", "id_rsa"),
-                os.path.join(home, ".ssh", "id_ed25519"),
-                os.path.join(home, ".ssh", "id_dsa"),
+#                os.path.join(home, ".ssh", "id_rsa"),
+#                os.path.join(home, ".ssh", "id_ed25519"),
+#                os.path.join(home, ".ssh", "id_dsa"),
                 os.path.join(home, ".ssh", "id_conduit")
             ]
             # Filter to only keys that actually exist on your Windows machine
@@ -154,6 +157,237 @@ class ServerWorker(QThread):
         except Exception as e:
             return f"[!] {s['name']} Error: {str(e)}"            
 
+class StatsWorker(QThread):
+    finished_signal = pyqtSignal(str)
+
+    def __init__(self, targets, display_mode):
+        super().__init__()
+        self.targets = targets
+        self.display_mode = display_mode
+
+    def run(self):
+        results = []
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            futures = [executor.submit(self.get_stats, s) for s in self.targets]
+            for f in as_completed(futures):
+                results.append(f.result())
+        
+        results = sorted(results, key=lambda x: x.get('mbps_val', 0), reverse=True)
+        self.finished_signal.emit(self.generate_table(results))
+
+    def get_stats(self, s):
+        display_label = s['name'] if self.display_mode == 'name' else s['ip']
+        res = {"label": display_label, "success": False, "clients": "0", "up": "0B", 
+               "down": "0B", "uptime": "Offline", "mbps": "0.00", "mbps_val": 0.0}
+        
+        try:
+            home = os.path.expanduser("~")
+            key_path = os.path.join(home, ".ssh", "id_conduit")
+            
+            connect_kwargs = {
+                "key_filename": key_path,
+                "look_for_keys": False, 
+                "allow_agent": False,
+                "timeout": 15
+            }
+            cfg = Config(overrides={'run': {'pty': True}})
+
+            with Connection(host=s['ip'], user=s['user'], port=int(s['port']), 
+                            connect_kwargs=connect_kwargs, config=cfg) as conn:
+                
+                output = ""
+                try:
+                    # We reduce timeout slightly so the catch happens faster
+                    cmd = "/opt/conduit/conduit service status -f"
+                    result = conn.run(cmd, hide=True, timeout=10)
+                    output = result.stdout
+                except Exception as e:
+                    # IMPORTANT: Even if it times out, result objects in Fabric 
+                    # often store what they managed to read in the exception object!
+                    if hasattr(e, 'result') and e.result.stdout:
+                        output = e.result.stdout
+                    else:
+                        # Fallback: if we can't get it from the exception, the server is too slow
+                        res["uptime"] = "Timeout"
+                        return res
+
+                if output:
+                    clean = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]').sub('', output)
+                    
+                    # If we see "Clients" or "Status", we have valid data regardless of the timeout error
+                    if "Clients" in clean:
+                        res["success"] = True
+                        
+                        def get_last(pat, txt):
+                            found = re.findall(pat, txt, re.IGNORECASE)
+                            return found[-1].strip() if found else "0"
+
+                        res["clients"] = get_last(r"Clients:\s*(\d+)", clean)
+                        res["up"] = get_last(r"Upload:\s*([\d\.]+ [TGMK]?B)", clean)
+                        res["down"] = get_last(r"Download:\s*([\d\.]+ [TGMK]?B)", clean)
+                        
+                        uptime_match = re.search(r"Uptime:\s*([\dhm\s]+s)", clean)
+                        res["uptime"] = uptime_match.group(1).strip() if uptime_match else "N/A"
+                        
+                        # Mbps logic
+                        d_bytes = self.parse_to_bytes(res["down"])
+                        total_sec = self.uptime_to_seconds(res["uptime"])
+                        if total_sec > 0:
+                            mbps = (d_bytes * 8) / total_sec / 10**6
+                            res["mbps_val"] = mbps
+                            res["mbps"] = f"{mbps:.2f}"
+        except Exception as e:
+            res["uptime"] = "Conn Error"
+            
+        return res
+
+    def uptime_to_seconds(self, uptime_str):
+        try:
+            # Handle formats like 6h55m19s
+            h = int(re.search(r'(\d+)h', uptime_str).group(1)) if 'h' in uptime_str else 0
+            m = int(re.search(r'(\d+)m', uptime_str).group(1)) if 'm' in uptime_str else 0
+            s = int(re.search(r'(\d+)s', uptime_str).group(1)) if 's' in uptime_str else 0
+            return (h * 3600) + (m * 60) + s
+        except:
+            return 0
+
+    def parse_to_bytes(self, s):
+        if not s or "0B" in s: return 0.0
+        match = re.search(r'([\d\.]+)', s)
+        if not match: return 0.0
+        num = float(match.group(1))
+        u = s.upper()
+        if 'TB' in u: return num * 1024**4
+        if 'GB' in u: return num * 1024**3
+        if 'MB' in u: return num * 1024**2
+        if 'KB' in u: return num * 1024
+        return num
+
+    def generate_table(self, results):
+        # Slightly wider name column for Linux paths/long names
+        head = f"│ {'Name/IP':<20} │ {'Clients':<7} │ {'Up':<9} │ {'Down':<9} │ {'Uptime':<14} │ {'Mbps':<6} │\n"
+        sep = "├" + "─"*20 + "┼" + "─"*9 + "┼" + "─"*11 + "┼" + "─"*11 + "┼" + "─"*16 + "┼" + "─"*8 + "┤\n"
+        body = ""
+        total_c = 0
+        for r in results:
+            status = "✓" if r["success"] else "✗"
+            body += f"│ {status} {r['label'][:18]:<18} │ {r['clients']:<7} │ {r['up']:<9} │ {r['down']:<9} │ {r['uptime']:<14} │ {r['mbps']:<8} │\n"
+            if r["success"]: total_c += int(r["clients"])
+        
+        w = 83
+        return f"┌" + "─"*w + "┐\n" + head + sep + body + "└" + "─"*w + "┘\nTOTAL CLIENTS: " + str(total_c)
+
+class StatsWorker_windows(QThread):
+    finished_signal = pyqtSignal(str)
+
+    def __init__(self, targets, display_mode):
+        super().__init__()
+        self.targets = targets
+        self.display_mode = display_mode # 'name' or 'ip'
+
+    def parse_to_bytes(self, s):
+        if not s or "N/A" in s: return 0.0
+        match = re.search(r'([\d\.]+)', s)
+        if not match: return 0.0
+        num = float(match.group(1))
+        unit = s.upper()
+        if 'TB' in unit: return num * 1024**4
+        if 'GB' in unit: return num * 1024**3
+        if 'MB' in unit: return num * 1024**2
+        if 'KB' in unit: return num * 1024
+        return num
+
+    def run(self):
+        results = []
+        # Increased workers for faster batch processing
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            futures = [executor.submit(self.get_stats, s) for s in self.targets]
+            for f in as_completed(futures):
+                results.append(f.result())
+        
+        # Sort by Mbps descending
+        results = sorted(results, key=lambda x: x.get('mbps_val', 0), reverse=True)
+        report = self.generate_table(results)
+        self.finished_signal.emit(report)
+
+    def get_stats(self, s):
+        # Determine display name based on Radio Button
+        display_label = s['name'] if self.display_mode == 'name' else s['ip']
+        
+        res = {
+            "label": display_label, 
+            "success": False, 
+            "clients": "0", 
+            "up": "0B", 
+            "down": "0B", 
+            "uptime": "N/A", 
+            "mbps": "0.00", 
+            "mbps_val": 0.0
+        }
+        
+        try:
+            home = os.path.expanduser("~")
+            # Ensure we try your specific conduit key
+            key_path = os.path.join(home, ".ssh", "id_conduit")
+            
+            connect_kwargs = {"timeout": 10, "look_for_keys": True}
+            if os.path.exists(key_path):
+                connect_kwargs["key_filename"] = key_path
+            if s['pass']:
+                connect_kwargs["password"] = s['pass']
+
+            with Connection(host=s['ip'], user=s['user'], port=int(s['port']), connect_kwargs=connect_kwargs) as conn:
+                # Get the status from the server
+                result = conn.run("/opt/conduit/conduit service status -f", hide=True, timeout=15)
+                raw_out = result.stdout
+                clean = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]').sub('', raw_out)
+                
+                res["success"] = True
+                # Use Regex to extract values
+                res["clients"] = (re.findall(r"Clients:\s*(\d+)", clean) or ["0"])[-1]
+                res["up"] = (re.findall(r"Upload:\s*([\d\.]+ [TGMK]?B)", clean) or ["0B"])[-1]
+                res["down"] = (re.findall(r"Download:\s*([\d\.]+ [TGMK]?B)", clean) or ["0B"])[-1]
+                
+                # Extract Uptime (e.g., 2h 15m 10s)
+                uptime_match = re.search(r"Uptime:\s*([\dhm\s]+s)", clean)
+                if uptime_match:
+                    res["uptime"] = uptime_match.group(1).strip()
+                
+                # Calculate Mbps
+                d_bytes = self.parse_to_bytes(res["down"])
+                uptime_str = res["uptime"]
+                
+                # Convert uptime string to total seconds for math
+                h = int(re.search(r'(\d+)h', uptime_str).group(1)) if 'h' in uptime_str else 0
+                m = int(re.search(r'(\d+)m', uptime_str).group(1)) if 'm' in uptime_str else 0
+                s_sec = int(re.search(r'(\d+)s', uptime_str).group(1)) if 's' in uptime_str else 0
+                total_sec = (h * 3600) + (m * 60) + s_sec
+                
+                if total_sec > 0:
+                    mbps = (d_bytes * 8) / total_sec / 10**6
+                    res["mbps_val"] = mbps
+                    res["mbps"] = f"{mbps:.2f}"
+        except Exception as e:
+            res["uptime"] = "Offline"
+        return res
+
+    def generate_table(self, results):
+        # Adjusted widths for Uptime column
+        head = f"│ {'Name/IP':<18} │ {'Clients':<7} │ {'Up':<9} │ {'Down':<9} │ {'Uptime':<12} │ {'Mbps':<6} │\n"
+        sep = "├" + "─"*20 + "┼" + "─"*9 + "┼" + "─"*11 + "┼" + "─"*11 + "┼" + "─"*14 + "┼" + "─"*8 + "┤\n"
+        body = ""
+        total_c = 0
+        
+        for r in results:
+            status_char = "✓" if r["success"] else "✗"
+            name_trunc = r['label'][:16]
+            body += f"│ {status_char} {name_trunc:<16} │ {r['clients']:<7} │ {r['up']:<9} │ {r['down']:<9} │ {r['uptime']:<12} │ {r['mbps']:<6} │\n"
+            if r["success"]: total_c += int(r["clients"])
+        
+        width = 81
+        footer = f"\nTOTAL CLIENTS: {total_c} | TIME: {datetime.now().strftime('%H:%M:%S')}"
+        return f"┌" + "─"*width + "┐\n" + head + sep + body + "└" + "─"*width + "┘" + footer
+
 # --- 3. Main GUI Window ---
 class ConduitGUI(QMainWindow):
     def __init__(self):
@@ -211,9 +445,13 @@ class ConduitGUI(QMainWindow):
         self.btn_re.setToolTip("Use Restart if server is already running.")
         self.btn_stat = QPushButton("Status"); self.btn_quit = QPushButton("Quit")
         self.btn_reset.setToolTip("Use if clients not added after hours or server waiting to connect.")
-        for b in [self.btn_start, self.btn_stop, self.btn_re, self.btn_reset, self.btn_stat, self.btn_quit]:
+        self.btn_stats = QPushButton("Statistics")
+        self.btn_stats.setStyleSheet("background-color: #2c3e50; color: white; font-weight: bold;")
+
+        for b in [self.btn_start, self.btn_stop, self.btn_re, self.btn_reset, self.btn_stat, self.btn_stats, self.btn_quit]:
             ctrl_lay.addWidget(b)
         layout.addLayout(ctrl_lay)
+
 
         self.console = QPlainTextEdit(); self.console.setReadOnly(True)
         self.console.setStyleSheet("background: #1e1e1e; color: #00ff00; font-family: Consolas;")
@@ -235,6 +473,21 @@ class ConduitGUI(QMainWindow):
         self.btn_stop.clicked.connect(lambda: self.confirm_action("stop"))
         self.btn_re.clicked.connect(lambda: self.confirm_action("restart"))
         self.btn_reset.clicked.connect(self.confirm_reset)
+        self.btn_stats.clicked.connect(self.run_stats)
+
+    def run_stats(self):
+        targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
+        if not targets: 
+            QMessageBox.warning(self, "Stats", "Add servers to the right-side list first.")
+            return
+            
+        # Check which radio button is active
+        mode = 'name' if self.rad_name.isChecked() else 'ip'
+        
+        self.console.appendPlainText(f"\n[>>>] Fetching Statistics (Display: {mode.upper()})...")
+        self.stats_thread = StatsWorker(targets, mode)
+        self.stats_thread.finished_signal.connect(lambda m: self.console.appendPlainText(m))
+        self.stats_thread.start()
 
     def confirm_action(self, action):
         """Standard guard for Start, Stop, and Restart"""
