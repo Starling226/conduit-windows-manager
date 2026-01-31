@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import time
 import platform
 import statistics
 import ipaddress
@@ -89,11 +90,7 @@ class ServerWorker(QThread):
             # Cross-platform home directory
             home = os.path.expanduser("~")
             
-            # List of potential private keys to try
             potential_keys = [
-#                os.path.join(home, ".ssh", "id_rsa"),
-#                os.path.join(home, ".ssh", "id_ed25519"),
-#                os.path.join(home, ".ssh", "id_dsa"),
                 os.path.join(home, ".ssh", "id_conduit")
             ]
             # Filter to only keys that actually exist on your Windows machine
@@ -143,11 +140,6 @@ class ServerWorker(QThread):
                     run_cmd("systemctl start conduit")
                     return f"[!] {s['name']}: FULL RESET COMPLETE (Data wiped & restarted)."
 
-#                if self.action == "status":
-#                    res = run_cmd("systemctl is-active conduit")
-#                    state = "Active" if res.ok else "Inactive"
-#                    return f"[*] {s['name']} ({s['ip']}): {state}"
-
                 if self.action == "status":
                     # 1. Get the standard systemctl status (Active/Inactive)
                     status_res = run_cmd("systemctl is-active conduit")
@@ -177,8 +169,6 @@ class ServerWorker(QThread):
                     
                     c.sudo(f"systemctl {self.action} conduit", hide=True)
                     return f"[+] {s['name']} {self.action.capitalize()}ed."
-
-                # ... (rest of the start/stop/restart logic using run_cmd)
                 
         except Exception as e:
             return f"[!] {s['name']} Error: {str(e)}"            
@@ -215,14 +205,16 @@ class StatsWorker(QThread):
 
             with Connection(host=s['ip'], user=s['user'], port=int(s['port']), connect_kwargs=connect_kwargs) as conn:
                 # Command to get last 1 hour of raw stats
-                cmd = "journalctl -u conduit.service --since '1 hour ago' -o cat | grep '\\[STATS\\]'"
+#                cmd = "journalctl -u conduit.service --since '1 hour ago' -o cat | grep '\\[STATS\\]'"
+                cmd = "journalctl -u conduit.service --since '1 hour ago' -o cat | grep -F '[STATS]'"
                 result = conn.run(cmd, hide=True, timeout=15)
                 output = result.stdout.strip()
 
                 if output:
                     lines = output.splitlines()
                     # Pattern for: [STATS] Clients: 72 | Up: 236.8 MB | Down: 1.6 GB | Uptime: 37m54s
-                    pattern = re.compile(r"Clients:\s*(\d+)\s*\|\s*Up:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Down:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Uptime:\s*([\w\d]+)")
+                    pattern = re.compile(r"\[STATS\].*?(?:Clients|Connected):\s*(\d+)\s*\|\s*Up:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Down:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Uptime:\s*([\w\d]+)")
+#                    pattern = re.compile(r"Clients:\s*(\d+)\s*\|\s*Up:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Down:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Uptime:\s*([\w\d]+)")
                     
                     data_points = []
                     for line in lines:
@@ -378,6 +370,7 @@ class StatsWorker(QThread):
 
 class DeployWorker(QThread):
     log_signal = pyqtSignal(str)
+    remove_password_signal = pyqtSignal(str)
 
     def __init__(self, targets, params):
         super().__init__()
@@ -401,18 +394,58 @@ class DeployWorker(QThread):
             for f in as_completed(futures):
                 self.log_signal.emit(f.result())
 
+
     def deploy_task(self, s, pub_key):
         try:
-            config = Config(overrides={'run': {'pty': True}, 'timeouts': {'connect': 20}})
+
+#            home = os.path.expanduser("~")
+#            private_key_path = os.path.join(home, ".ssh", "id_conduit")
+
+            home = os.path.expanduser("~")
+            key_path = os.path.join(home, ".ssh", "id_conduit")
+        
+            pwd = s.get('pass') 
+        
             conn_params = {
-                "password": self.params['password'],
-                "look_for_keys": False,
-                "allow_agent": False
+                "timeout": 10,
+                "banner_timeout": 20
             }
 
-            with Connection(host=s['ip'], user=self.params['user'], port=int(s['port']), 
-                            connect_kwargs=conn_params, config=config) as conn:
+            if pwd:
+                conn_params["password"] = pwd
+                conn_params["look_for_keys"] = True
+                conn_params["allow_agent"] = False
+            else:
+                # Key-only mode
+                conn_params["key_filename"] = [key_path]
+                conn_params["look_for_keys"] = False
+                conn_params["allow_agent"] = False
+
+            # Configure connection to NOT prompt for passwords
+#            conn_params = {
+#                "look_for_keys": True,
+#                "allow_agent": True,
+#                "key_filename": private_key_path,
+#                "timeout": 10,
+#            }
+
+            # If a password was actually typed in the GUI, add it, otherwise don't
+#            if self.params.get('password'):
+#                conn_params["password"] = self.params['password']
+
+            with Connection(host=s['ip'], 
+                            user=self.params['user'],
+                            port=int(s['port']), 
+                            connect_kwargs=conn_params,
+                            inline_ssh_env=True
+            ) as conn:
                 
+                # Check if we are actually root or have access
+                # This "id -u" check returns 0 for root
+                res = conn.run("id -u", hide=True, warn=True)
+                if not res.ok:
+                    return f"[SKIP] {s['ip']}: Could not connect or not root."
+
                 # 1. Key Injection
                 conn.run("mkdir -p ~/.ssh && chmod 700 ~/.ssh", hide=True)
                 conn.run(f'echo "{pub_key}" >> ~/.ssh/authorized_keys', hide=True)
@@ -430,9 +463,6 @@ class DeployWorker(QThread):
                 conn.run(pkg_cmd, hide=True)
 
                 # 3. Download Binary
-#                url = "https://github.com/ssmirr/conduit/releases/download/e421eff/conduit-linux-amd64"
-#                url = "https://github.com/ssmirr/conduit/releases/download/2fd31d4/conduit-linux-amd64"
-#                conn.run(f"curl -L -o /opt/conduit/conduit {url}", hide=True)
                 conn.run(f"curl -L -o /opt/conduit/conduit {CONDUIT_URL}", hide=True)                
                 conn.run("chmod +x /opt/conduit/conduit")
 
@@ -471,74 +501,6 @@ WantedBy=multi-user.target
                 conn.run("systemctl start conduit", hide=True)
                 
                 return f"[OK] {s['ip']} successfully deployed (Manual Service Config)."
-        except Exception as e:
-            return f"[ERROR] {s['ip']} failed: {str(e)}"
-
-class DeployWorker_old(QThread):
-    log_signal = pyqtSignal(str)
-
-    def __init__(self, targets, params):
-        super().__init__()
-        self.targets = targets
-        self.params = params # password, max_clients, bandwidth, user
-
-    def run(self):
-        # Read the public key once
-        home = os.path.expanduser("~")
-        pub_key_path = os.path.join(home, ".ssh", "id_conduit.pub")
-        
-        if not os.path.exists(pub_key_path):
-            self.log_signal.emit(f"[ERROR] Public key not found at: {pub_key_path}")
-            return
-
-        with open(pub_key_path, "r") as f:
-            pub_key_content = f.read().strip()
-
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(self.deploy_task, s, pub_key_content) for s in self.targets]
-            for f in as_completed(futures):
-                self.log_signal.emit(f.result())
-
-    def deploy_task(self, s, pub_key):
-        try:
-            config = Config(overrides={'run': {'pty': True}, 'timeouts': {'connect': 20}})
-            conn_params = {
-                "password": self.params['password'],
-                "look_for_keys": False,
-                "allow_agent": False
-            }
-
-            with Connection(host=s['ip'], user=self.params['user'], port=int(s['port']), 
-                            connect_kwargs=conn_params, config=config) as conn:
-                
-                # 1. Key Injection
-                conn.run("mkdir -p ~/.ssh && chmod 700 ~/.ssh", hide=True)
-                conn.run(f'echo "{pub_key}" >> ~/.ssh/authorized_keys', hide=True)
-                conn.run("chmod 600 ~/.ssh/authorized_keys", hide=True)
-
-                # 2. Cleanup & Install Dependencies
-                conn.run("systemctl stop conduit", warn=True, hide=True)
-                conn.run("rm -f /opt/conduit/conduit", warn=True, hide=True)
-                conn.run("mkdir -p /opt/conduit", hide=True)
-
-                pkg_cmd = "dnf install wget firewalld curl -y" if conn.run("command -v dnf", warn=True, hide=True).ok else "apt-get update -y && apt-get install wget firewalld curl -y"
-                conn.run(pkg_cmd, hide=True)
-
-                # 3. Download & Install Binary
-                url = "https://github.com/ssmirr/conduit/releases/download/e421eff/conduit-linux-amd64"
-                conn.run(f"curl -L -o /opt/conduit/conduit {url}", hide=True)
-                conn.run("chmod +x /opt/conduit/conduit")
-                conn.run("/opt/conduit/conduit service install", hide=True)
-
-                # 4. Configure Service
-                svc = "/etc/systemd/system/conduit.service"
-                cmd = f"/opt/conduit/conduit start --max-clients {self.params['clients']} --bandwidth {self.params['bw']} --data-dir /var/lib/conduit"
-                conn.run(f"sed -i 's|^ExecStart=.*|ExecStart={cmd}|' {svc}")
-                
-                # 5. Start
-                conn.run("systemctl daemon-reload && systemctl enable conduit && systemctl start conduit", hide=True)
-                
-                return f"[OK] {s['ip']} successfully deployed."
         except Exception as e:
             return f"[ERROR] {s['ip']} failed: {str(e)}"
 
@@ -705,7 +667,181 @@ class ConduitGUI(QMainWindow):
 
         return {"clients": clients, "bw": bw}
 
+
     def run_deploy(self):
+        # 1. Get targets
+        selected_targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
+        if not selected_targets:
+            QMessageBox.warning(self, "Deployment", "No servers selected.")
+            return
+
+        validated = self.get_validated_inputs()
+        if not validated: return 
+
+        valid_targets = []
+
+        # THE WARNING GATE ---
+        target_names = ", ".join([s.get('name', s['ip']) for s in selected_targets])
+        
+        warning_msg = (
+            "⚠️ CRITICAL: FRESH DEPLOYMENT\n\n"
+            f"You are about to deploy to: {target_names}\n\n"
+            "This action will:\n"
+            "• Connect as ROOT\n"
+            "• OVERWRITE any existing conduit installation if this is a re-deployment\n"
+            "• RESET all service configurations\n\n"
+            "Are you absolutely sure you want to proceed?"
+        )
+
+        # Show the dialog with 'No' as the default safe choice
+        reply = QMessageBox.warning(
+            self, 
+            "Confirm System Reinstall", 
+            warning_msg,
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            self.console.appendPlainText("[CANCELLED] Deployment aborted by user.")
+            return
+
+        # --- CASE: Single Selection ---
+
+        if len(selected_targets) == 1:
+            target = selected_targets[0]
+#            stored_user = target.get('user', '').strip().lower()
+            target_ip = target.get('ip', '').strip()
+            stored_user,stored_pwd = self.get_root_pwd_from_file(target_ip)
+#            stored_pwd = target.get('pass', '').strip()
+            
+            # Check if we have a password AND it belongs to root
+            has_root_creds = (stored_user == 'root' and stored_pwd)
+
+            if not has_root_creds:
+                # Explain why we are asking (either no pwd, or pwd is for a sub-user)
+                reason = "No root password found" if not stored_pwd else f"Stored password is for user '{stored_user}', not 'root'"
+                
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Root Authentication Required")
+                msg.setText(f"{reason} for {target['ip']}.\n\nHow do you want to proceed?")
+                btn_pwd = msg.addButton("Enter Root Password", QMessageBox.ActionRole)
+                btn_key = msg.addButton("Use Root SSH Key", QMessageBox.ActionRole)
+                msg.addButton(QMessageBox.Cancel)
+                
+                msg.exec()
+                
+                if msg.clickedButton() == btn_pwd:
+                    pwd_input, ok = QInputDialog.getText(self, "Root Password", "Enter Root Password:", QLineEdit.Password)
+                    if ok and pwd_input:
+                        target['pass'] = pwd_input
+                        # We force the worker to use 'root' regardless of what's in the file
+                        valid_targets = [target]
+                    else: return
+                elif msg.clickedButton() == btn_key:
+                    target['pass'] = None 
+                    valid_targets = [target]
+                else:
+                    return
+            else:
+                for s in selected_targets:
+                    # If password exists, or if we want to try key-only servers
+                    # For bulk, we'll assume if no password exists, we attempt Key-only
+                    valid_targets.append(s)
+
+        # 4. Final Verification
+        if not valid_targets: return
+
+        params = {
+            "user": "root",
+            "clients": validated['clients'], 
+            "bw": validated['bw']            
+        }
+
+        # UI Feedback and Start Thread
+        self.btn_deploy.setEnabled(False)
+        self.btn_deploy.setText("Deploying...")
+        
+        self.deploy_thread = DeployWorker(valid_targets, params)
+        self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
+        self.deploy_thread.remove_password_signal.connect(self.remove_password_from_file)
+        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
+        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
+        
+        self.deploy_thread.start()
+
+    def run_deploy3(self):
+        # 1. Get all selected targets
+        selected_targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
+        if not selected_targets:
+            QMessageBox.warning(self, "Deployment", "No servers selected.")
+            return
+
+        # 2. Validation check (Clients/BW)
+        validated = self.get_validated_inputs()
+        if not validated:
+            return 
+
+        # 3. Filter for servers that actually have a password
+        valid_targets = []
+        for s in selected_targets:
+            pwd = s.get('pass', '').strip()
+            if pwd:
+                valid_targets.append(s)
+            else:
+                self.console.appendPlainText(f"[SKIP] {s['ip']}: No root password found in servers.txt.")
+
+        # 4. If no servers survived the filter, stop here
+        if not valid_targets:
+            QMessageBox.critical(self, "Deployment Error", "None of the selected servers have a root password stored.")
+            return
+
+        # 5. Confirm deployment for the valid list
+#        warning_text = (
+#            f"Ready to deploy {len(valid_targets)} server(s).\n\n"
+#            "This will perform a fresh ROOT installation.\n"
+#            "Are you sure you want to proceed?"
+#        )
+
+        warning_text = (
+            "WARNING: PRE-EXISTING INSTALLATION DETECTED?\n\n"
+            "If these are existing Conduit servers, this process will:\n"
+            "1. STOP the current conduit service.\n"
+            "2. REMOVE the existing conduit binary.\n"
+            "3. INSTALL a fresh copy as ROOT and reset the service configuration.\n\n"
+            f"Config: {validated['clients']} Clients | {validated['bw']} Mbps\n\n"
+            "Proceed only if you have the root password for these servers.\n"
+            "Are you absolutely sure you want to proceed?"
+        )
+        
+
+        reply = QMessageBox.critical(self, "Confirm Deployment", warning_text, 
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        # 6. Set params (password is now handled individually inside DeployWorker)
+        params = {
+            "user": "root",
+            "clients": validated['clients'], 
+            "bw": validated['bw']            
+        }
+
+        # UI Feedback
+        self.btn_deploy.setEnabled(False)
+        self.btn_deploy.setText("Deploying...")
+        
+        # 7. Start the Worker with the VALID targets only
+        self.deploy_thread = DeployWorker(valid_targets, params)
+        self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
+        self.deploy_thread.remove_password_signal.connect(self.remove_password_from_file)
+
+        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
+        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
+        
+        self.deploy_thread.start()
+
+    def run_deploy2(self):
         targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
         if not targets:
             QMessageBox.warning(self, "Deployment", "No servers selected.")
@@ -754,6 +890,9 @@ class ConduitGUI(QMainWindow):
         self.deploy_thread = DeployWorker(targets, params)
         self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
         
+        self.deploy_thread.remove_password_signal.connect(self.remove_password_from_file)
+#        self.deploy_thread.need_password_signal.connect(self.prompt_for_missing_password)
+
         # Reset button state when done
         self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
         self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
@@ -1048,21 +1187,121 @@ class ConduitGUI(QMainWindow):
             self.lbl_path.setText("File: servers.txt (New)")
             self.console.appendPlainText("[NOTICE] No 'servers.txt' found. Your first server will create this file.")
 
+    def remove_password_from_file(self,target_ip):
+        filename = "servers.txt"
+        if not os.path.exists(filename):
+            return
+
+        updated_lines = []
+
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line: continue # Handle comments/empty lines
+                    
+                parts = [p.strip() for p in line.split(',')]
+
+                # Basic requirement: name, ip, port, user
+                if len(parts) >= 4:
+                    # 1. IP Validation
+                    if not self.is_valid_ip(parts[1]):
+                        continue
+
+                    # 2. Port Validation
+                    try:
+                        port_num = int(parts[2])
+                        if not (1 <= port_num <= 65535):
+                            raise ValueError
+                    except ValueError:
+                        continue
+
+                if parts[1] == target_ip:
+                    if parts[3] == "root":
+                        # Reconstruct line without the password
+                        # Format: name, ip, port, user, 
+                        new_line = f"{parts[0]}, {parts[1]}, {parts[2]}, {parts[3]}, "
+                    else:
+                        updated_lines.append(line)
+
+                else:
+                    updated_lines.append(line)
+
+        with open(filename, "w") as f:
+            f.write("\n".join(updated_lines) + "\n")
+
+    def get_root_pwd_from_file(self,target_ip):
+        filename = "servers.txt"
+        if not os.path.exists(filename):
+            return "", ""
+
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line: continue # Handle comments/empty lines
+                    
+                parts = [p.strip() for p in line.split(',')]
+
+                # Basic requirement: name, ip, port, user
+                if len(parts) < 5: continue
+
+                # 1. IP Validation
+                if not self.is_valid_ip(parts[1]):
+                    continue
+
+                # 2. Port Validation
+                try:
+                    port_num = int(parts[2])
+                    if not (1 <= port_num <= 65535):
+                        raise ValueError
+                except ValueError:
+                    continue
+
+                if parts[1] == target_ip:
+                    if parts[3] == "root":
+                        return parts[3],parts[4]
+                    else:
+                        return "", ""
+
+        return "", ""
+
     def load_from_file(self, path):
         try:
+
+            self.server_data.clear()
+            self.pool.clear() 
+
             with open(path, 'r') as f:
-                lines = f.readlines()
-                # Skip header if it exists
-                start_idx = 1 if lines and "name," in lines[0] else 0
-                
-                for line in lines[start_idx:]:
-                    if not line.strip(): continue
+                for line in f:
+                    line = line.strip()
+                    if not line: continue # Handle comments/empty lines
+                    
                     parts = [p.strip() for p in line.split(',')]
-                    if len(parts) >= 5:
+
+                    # Basic requirement: name, ip, port, user
+                    if len(parts) >= 4:
+                        # 1. IP Validation
+                        if not self.is_valid_ip(parts[1]):
+                            self.console.appendPlainText(f"[NOTICE] {parts[1]} is not a correct IP address. server {parts[0]} skipped.")
+                            continue
+
+                        # 2. Port Validation
+                        try:
+                            port_num = int(parts[2])
+                            if not (1 <= port_num <= 65535):
+                                raise ValueError
+                        except ValueError:
+                            self.console.appendPlainText(f"[NOTICE] Invalid Port {parts[2]} for {parts[0]}. Skipped.")
+                            continue
+
+                        # 3. Create Dictionary with Safe Password Check
                         d = {
-                            'name': parts[0], 'ip': parts[1], 
-                            'port': parts[2], 'user': parts[3], 'pass': parts[4]
-                        }
+                            'name': parts[0], 
+                            'ip': parts[1], 
+                            'port': str(port_num), # Keep as string for Fabric
+                            'user': parts[3], 
+                            'pass': parts[4] if len(parts) > 4 else ''
+                        }                        
+
                         self.server_data.append(d)
                         self.pool.addItem(self.create_item(d))
             
@@ -1070,6 +1309,7 @@ class ConduitGUI(QMainWindow):
             self.console.appendPlainText(f"[SUCCESS] {len(self.server_data)} servers imported.")
         except Exception as e:
             self.console.appendPlainText(f"[ERROR] Could not read file: {e}")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv); gui = ConduitGUI(); gui.show(); sys.exit(app.exec_())
