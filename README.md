@@ -134,7 +134,8 @@ Customization: To change the interval, edit CHECK_INTERVAL_SECONDS (line 14) in 
 * **Add server:** Use Add Server(+) if you have not added any server yet. You can also use this later to add further servers.
 * **Delete server:** Use Delete Server if you no longer needed.
 * **Deploy:** Select one or a number of servers in the right list and cick Deploy. This will deploy your server(s)
-* **Status:** Clicking on this dosplay the current status of your server(s), whether it is active or dead.
+* **Upgrade:** This upgrade the conduit cli binary in remote server to the version displayed in GUI.
+* **Status:** Clicking on this dosplay the current status of your server(s), whether it is active or dead. It also shows the last 10 connections to the server.
 * **Statistics:** This shows the network analytic. Clients is the average of last one hour. To get the current live connections and conduit status click on Status Button.
 * **Stop:** If you like to stop Conduit service, use this. You hardly need this.
 * **Start:** If Conduit service is not active, use this to start it.

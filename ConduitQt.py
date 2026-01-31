@@ -372,10 +372,11 @@ class DeployWorker(QThread):
     log_signal = pyqtSignal(str)
     remove_password_signal = pyqtSignal(str)
 
-    def __init__(self, targets, params):
+    def __init__(self, action, targets, params):
         super().__init__()
         self.targets = targets
         self.params = params # password, max_clients, bandwidth, user
+        self.action = action
 
     def run(self):
         # Read the public key once
@@ -389,11 +390,20 @@ class DeployWorker(QThread):
         with open(pub_key_path, "r") as f:
             pub_key_content = f.read().strip()
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(self.deploy_task, s, pub_key_content) for s in self.targets]
-            for f in as_completed(futures):
-                self.log_signal.emit(f.result())
+        if self.action == "deploy":
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = [executor.submit(self.deploy_task, s, pub_key_content) for s in self.targets]
+                for f in as_completed(futures):
+                    self.log_signal.emit(f.result())
 
+        elif self.action == "upgrade":
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = [executor.submit(self.upgrade_task, s) for s in self.targets]
+                for f in as_completed(futures):
+                    self.log_signal.emit(f.result())
+        else:
+            self.log_signal.emit(f"[WARNING] No action is taken: {s['ip']}")
+            return
 
     def deploy_task(self, s, pub_key):
         try:
@@ -492,6 +502,71 @@ WantedBy=multi-user.target
         except Exception as e:
             return f"[ERROR] {s['ip']} failed: {str(e)}"
 
+    def upgrade_task(self, s):
+        try:
+
+            home = os.path.expanduser("~")
+            key_path = os.path.join(home, ".ssh", "id_conduit")
+        
+            conn_params = {
+                "timeout": 10,
+                "banner_timeout": 20
+            }
+
+            try:
+                # Automatically extract 'version' from the URL
+                version_tag = CONDUIT_URL.split('/')[-2]
+            except (NameError, IndexError):
+                version_tag = "Unknown"
+
+            conn_params["key_filename"] = [key_path]
+            conn_params["look_for_keys"] = False
+            conn_params["allow_agent"] = False
+
+            with Connection(host=s['ip'], 
+                            user=self.params['user'],
+                            port=int(s['port']), 
+                            connect_kwargs=conn_params,
+                            inline_ssh_env=True
+            ) as conn:
+                
+                # Check if we are actually root or have access
+                # This "id -u" check returns 0 for root
+                res = conn.run("id -u", hide=True, warn=True)
+                if not res.ok:
+                    return f"[SKIP] {s['ip']}: Could not connect or not root."
+
+                # --- NEW: VERSION CHECK LOGIC ---
+                self.log_signal.emit(f"[{s['ip']}] Checking current version...")
+                v_check = conn.run("/opt/conduit/conduit --version", hide=True, warn=True)
+                
+                if v_check.ok:
+                    # Extract the hash from "conduit version e421eff"
+                    current_version = v_check.stdout.strip().split()[-1]
+                    
+                    if current_version == version_tag:
+                        return f"[SKIP] {s['ip']} is already running the latest version ({version_tag})."
+                # --------------------------------
+
+
+                # 2. Cleanup & Stop (Only runs if version is different or binary missing)
+                self.log_signal.emit(f"[{s['ip']}] Upgrading {current_version} -> {version_tag}...")
+
+                conn.run("systemctl stop conduit", warn=True, hide=True)
+                time.sleep(2)
+                conn.run("rm -f /opt/conduit/conduit", warn=True, hide=True)
+
+                # 3. Download Binary
+                conn.run(f"curl -L -o /opt/conduit/conduit {CONDUIT_URL}", hide=True)                
+                conn.run("chmod +x /opt/conduit/conduit")
+
+                # 5. Start
+                conn.run("systemctl start conduit", hide=True)                
+
+                return f"[OK] {s['ip']} successfully upgraded to conduit version {version_tag}."
+        except Exception as e:
+            return f"[ERROR] {s['ip']} failed: {str(e)}"
+
 # --- 3. Main GUI Window ---
 class ConduitGUI(QMainWindow):
     def __init__(self):
@@ -571,9 +646,15 @@ class ConduitGUI(QMainWindow):
         self.btn_stats.setStyleSheet("background-color: #2c3e50; color: white; font-weight: bold;")
 
         self.btn_deploy = QPushButton("Deploy")
-        self.btn_deploy.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold;")
+        self.btn_deploy.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold;")            
 
-        for b in [self.btn_start, self.btn_stop, self.btn_re, self.btn_reset, self.btn_stat, self.btn_stats, self.btn_deploy, self.btn_quit]:
+        self.btn_upgrade = QPushButton("Upgrade")
+#        self.btn_upgrade.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold;")
+#        self.btn_upgrade.setStyleSheet("background-color: #8e44ad; color: white; font-weight: bold;")
+        self.btn_upgrade.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold;")
+        self.btn_upgrade.setToolTip("Upgrade the conduit to the version displayed in GUI.")      
+
+        for b in [self.btn_start, self.btn_stop, self.btn_re, self.btn_reset, self.btn_stat, self.btn_upgrade, self.btn_stats, self.btn_deploy, self.btn_quit]:
             ctrl_lay.addWidget(b)
         layout.addLayout(ctrl_lay)
 
@@ -625,6 +706,8 @@ class ConduitGUI(QMainWindow):
         self.btn_reset.clicked.connect(self.confirm_reset)
         self.btn_stats.clicked.connect(self.run_stats)
         self.btn_deploy.clicked.connect(self.run_deploy)
+        self.btn_upgrade.clicked.connect(self.run_upgrade)
+        
 
 
     def get_validated_inputs(self):
@@ -750,11 +833,68 @@ class ConduitGUI(QMainWindow):
         self.btn_deploy.setEnabled(False)
         self.btn_deploy.setText("Deploying...")
         
-        self.deploy_thread = DeployWorker(valid_targets, params)
+        self.deploy_thread = DeployWorker("deploy",valid_targets, params)
         self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
         self.deploy_thread.remove_password_signal.connect(self.remove_password_from_file)
         self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
         self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
+        
+        self.deploy_thread.start()
+
+    def run_upgrade(self):
+        # 1. Get targets
+        selected_targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
+        if not selected_targets:
+            QMessageBox.warning(self, "Deployment", "No servers selected.")
+            return
+
+        validated = self.get_validated_inputs()
+        if not validated: return 
+
+        valid_targets = []
+
+        # THE WARNING GATE ---
+        target_names = ", ".join([s.get('name', s['ip']) for s in selected_targets])
+        
+        warning_msg = (
+            "⚠️ CRITICAL: UPGARDE CONDUIT\n\n"
+            f"You are about to upgrade: {target_names}\n\n"
+            "This action will:\n"
+            "• Connect as ROOT\n"
+            "• UPGARDE the existing conduit applicatinon\n"
+            "Are you sure you want to proceed?"
+        )
+
+        # Show the dialog with 'No' as the default safe choice
+        reply = QMessageBox.warning(
+            self, 
+            "Confirm System Upgrade", 
+            warning_msg,
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            self.console.appendPlainText("[CANCELLED] Upgrade aborted by user.")
+            return
+
+        # 4. Final Verification
+        if not selected_targets: return
+
+        params = {
+            "user": "root",
+            "clients": validated['clients'], 
+            "bw": validated['bw']            
+        }
+
+        # UI Feedback and Start Thread
+        self.btn_upgrade.setEnabled(False)
+        self.btn_upgrade.setText("Upgrading...")
+        
+        self.deploy_thread = DeployWorker("upgrade",selected_targets, params)
+        self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
+        self.deploy_thread.finished.connect(lambda: self.btn_upgrade.setEnabled(True))
+        self.deploy_thread.finished.connect(lambda: self.btn_upgrade.setText("Upgrade"))
         
         self.deploy_thread.start()
 
