@@ -104,7 +104,7 @@ Customization: To change the interval, edit CHECK_INTERVAL_SECONDS (line 14) in 
 * **Re-Start:** If you want to chnage Conduit parameters, like Max Clients or Bandwidth, check Apply Config Changes Checkbox and click Re-start. You can also use this if yours server is not connect after couple of hours.
 * **Reset:** You can reset the Conduit config using this. In case if you have not received any client or you think you do not have more clients usually less than 50 for more than a day, you can reset the config. If after frew hours you have receieved any clients you can also reset the config.
 * **Display Name/IP:** Use this to siwtch the list to Server name or IP address.
-* **Max Clients:** As rule of thumb, each core should support 50-60 clients. So if you have 4 cores you can set it to 225. This will possibly gives you up to 200 clients.
+* **Max Clients:** As a rule of thumb, each core should support 50-60 clients. So if you have 4 cores you can set it to 225. This will possibly gives you up to 200 clients.
 
 ## Important Notes
 * **SSH Port:** These scripts use the standard **SSH Port 22** for all connections.

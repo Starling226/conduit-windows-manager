@@ -185,71 +185,80 @@ class StatsWorker(QThread):
         results = sorted(results, key=lambda x: x.get('mbps_val', 0), reverse=True)
         self.finished_signal.emit(self.generate_table(results))
 
+
     def get_stats(self, s):
         display_label = s['name'] if self.display_mode == 'name' else s['ip']
         res = {"label": display_label, "success": False, "clients": "0", "up": "0B", 
-               "down": "0B", "uptime": "Offline", "mbps": "0.00", "mbps_val": 0.0}
+               "down": "0B", "uptime": "Offline", "mbps": "0.00", "mbps_val": 0.0,
+               "up_1h": "0B", "down_1h": "0B"}
         
         try:
             home = os.path.expanduser("~")
             key_path = os.path.join(home, ".ssh", "id_conduit")
-            
-            connect_kwargs = {
-                "key_filename": key_path,
-                "look_for_keys": False, 
-                "allow_agent": False,
-                "timeout": 15
-            }
-            cfg = Config(overrides={'run': {'pty': True}})
+            connect_kwargs = {"key_filename": [key_path], "look_for_keys": False, "allow_agent": False, "timeout": 10}
 
-            with Connection(host=s['ip'], user=s['user'], port=int(s['port']), 
-                            connect_kwargs=connect_kwargs, config=cfg) as conn:
-                
-                output = ""
-                try:
-                    # We reduce timeout slightly so the catch happens faster
-                    cmd = "/opt/conduit/conduit service status -f"
-                    result = conn.run(cmd, hide=True, timeout=10)
-                    output = result.stdout
-                except Exception as e:
-                    # IMPORTANT: Even if it times out, result objects in Fabric 
-                    # often store what they managed to read in the exception object!
-                    if hasattr(e, 'result') and e.result.stdout:
-                        output = e.result.stdout
-                    else:
-                        # Fallback: if we can't get it from the exception, the server is too slow
-                        res["uptime"] = "Timeout"
-                        return res
+            with Connection(host=s['ip'], user=s['user'], port=int(s['port']), connect_kwargs=connect_kwargs) as conn:
+                # Command to get last 1 hour of raw stats
+                cmd = "journalctl -u conduit.service --since '1 hour ago' -o cat | grep '\\[STATS\\]'"
+                result = conn.run(cmd, hide=True, timeout=15)
+                output = result.stdout.strip()
 
                 if output:
-                    clean = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]').sub('', output)
+                    lines = output.splitlines()
+                    # Pattern for: [STATS] Clients: 72 | Up: 236.8 MB | Down: 1.6 GB | Uptime: 37m54s
+                    pattern = re.compile(r"Clients:\s*(\d+)\s*\|\s*Up:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Down:\s*([\d\.]+)\s*([TGMK]?B)\s*\|\s*Uptime:\s*([\w\d]+)")
                     
-                    # If we see "Clients" or "Status", we have valid data regardless of the timeout error
-                    if "Clients" in clean:
-                        res["success"] = True
-                        
-                        def get_last(pat, txt):
-                            found = re.findall(pat, txt, re.IGNORECASE)
-                            return found[-1].strip() if found else "0"
+                    data_points = []
+                    for line in lines:
+                        m = pattern.search(line)
+                        if m:
+                            data_points.append({
+                                'c': int(m.group(1)),
+                                'u': self.parse_to_bytes(f"{m.group(2)} {m.group(3)}"),
+                                'd': self.parse_to_bytes(f"{m.group(4)} {m.group(5)}"),
+                                'ut': m.group(6)
+                            })
 
-                        res["clients"] = get_last(r"Clients:\s*(\d+)", clean)
-                        res["up"] = get_last(r"Upload:\s*([\d\.]+ [TGMK]?B)", clean)
-                        res["down"] = get_last(r"Download:\s*([\d\.]+ [TGMK]?B)", clean)
-                        
-                        uptime_match = re.search(r"Uptime:\s*([\dhm\s]+s)", clean)
-                        res["uptime"] = uptime_match.group(1).strip() if uptime_match else "N/A"
-                        
+                    if data_points:
+                        res["success"] = True
+                        first = data_points[0]
+                        last = data_points[-1]
+
+                        # Calculate Averages
+                        avg_clients = sum(d['c'] for d in data_points) / len(data_points)
+                        res["clients"] = str(int(round(avg_clients)))
+
+                        # Cumulative Totals (Last Record)
+                        res["up"] = self.format_bytes(last['u'])
+                        res["down"] = self.format_bytes(last['d'])
+                        res["uptime"] = last['ut']
+
+                        # Hourly Growth (Delta)
+                        res["up_1h"] = self.format_bytes(max(0, last['u'] - first['u']))
+                        res["down_1h"] = self.format_bytes(max(0, last['d'] - first['d']))
+
                         # Mbps logic
-                        d_bytes = self.parse_to_bytes(res["down"])
                         total_sec = self.uptime_to_seconds(res["uptime"])
                         if total_sec > 0:
-                            mbps = (d_bytes * 8) / total_sec / 10**6
+                            mbps = (last['d'] * 8) / total_sec / 10**6
                             res["mbps_val"] = mbps
                             res["mbps"] = f"{mbps:.2f}"
+                else:
+                    res["uptime"] = "No Data (1h)"
+
         except Exception as e:
             res["uptime"] = "Conn Error"
             
         return res
+
+    def format_bytes(self, size):
+        """Helper to convert bytes back to human readable string"""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} PB"
+
 
     def uptime_to_seconds(self, uptime_str):
         try:
@@ -284,41 +293,54 @@ class StatsWorker(QThread):
         return f"{b:.2f} PB"
 
     def generate_table(self, results):
-        # 1. Main Table Generation (The header and server rows)
-        width = 83
-        head = f"│ {'Name/IP':<20} │ {'Clients':<7} │ {'Up':<9} │ {'Down':<9} │ {'Uptime':<14} │ {'Mbps':<6} │\n"
-        sep = "├" + "─"*22 + "┼" + "─"*9 + "┼" + "─"*11 + "┼" + "─"*11 + "┼" + "─"*16 + "┼" + "─"*8 + "┤\n"
+        # 1. Main Table Generation
+        # width adjusted to 105 for comfortable spacing
+        width = 105
+        head = f"│ {'Name/IP':<20} │ {'Clients':<8} │ {'Up (total | 1h)':<20} │ {'Down (total | 1h)':<20} │ {'Uptime':<14} │ {'Mbps':<6} │\n"
+        sep = "├" + "─"*22 + "┼" + "─"*10 + "┼" + "─"*22 + "┼" + "─"*22 + "┼" + "─"*16 + "┼" + "─"*8 + "┤\n"
         
         body = ""
         valid_results = [r for r in results if r["success"]]
         
         for r in results:
             status = "✓" if r["success"] else "✗"
-            body += f"│ {status} {r['label'][:18]:<18} │ {r['clients']:<7} │ {r['up']:<9} │ {r['down']:<9} │ {r['uptime']:<14} │ {r['mbps']:<6} │\n"
+            if r["success"]:
+                # Clients is now just the average integer string
+                # Traffic format: "Total | Delta"
+                up_val = f"{r['up']} | {r['up_1h']}"
+                down_val = f"{r['down']} | {r['down_1h']}"
+                
+                body += f"│ {status} {r['label'][:18]:<18} │ {r['clients']:<8} │ {up_val:<20} │ {down_val:<20} │ {r['uptime']:<14} │ {r['mbps']:<6} │\n"
+            else:
+                body += f"│ {status} {r['label'][:18]:<18} │ {'-':<8} │ {'-':<20} │ {'-':<20} │ {r['uptime']:<14} │ {'0.00':<6} │\n"
         
         main_table = f"┌" + "─"*width + "┐\n" + head + sep + body + "└" + "─"*width + "┘"
 
-        # 2. Analytics Summary Logic (Integrated from your script)
+        # 2. Analytics Summary Logic
         if not valid_results:
             return main_table + "\n[!] No active data to calculate analytics."
 
-        # Set up timestamp for Iran Time (UTC+3:30)
         ts = (datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
         
-        total_clients = sum([int(r["clients"]) for r in valid_results if r["clients"].isdigit()])
+        # Clients are already stored as average strings, so we convert back to int for analytics
+        clients_list = [int(r["clients"]) for r in valid_results if r["clients"].isdigit()]
+        total_clients = sum(clients_list)
         
+        ups = [self.parse_to_bytes(r["up"]) for r in valid_results]
+        downs = [self.parse_to_bytes(r["down"]) for r in valid_results]
+        mbps_list = [r["mbps_val"] for r in valid_results]
+
         out = []
         out.append(f"\n--- Analytics Summary (Iran Time: {ts}) ---")
-        out.append(f"Total number of Clients across all servers: {total_clients}\n")
+        out.append(f"Total Average Clients across all servers: {total_clients}\n")
         
-        # Header for the Metric Table
         out.append(f"{'Metric':<12} │ {'Mean':<12} │ {'Median':<12} │ {'Min':<12} │ {'Max':<12}")
         sep_line = f"{'─'*13}┼{'─'*14}┼{'─'*14}┼{'─'*14}┼{'─'*14}"
         out.append(sep_line)
 
-        # Stat Row Helper function
         def get_stat_row(label, data_list, is_bytes=False):
             if not data_list: return ""
+            import statistics
             avg_val = statistics.mean(data_list)
             med_val = statistics.median(data_list)
             min_val = min(data_list)
@@ -328,16 +350,8 @@ class StatsWorker(QThread):
                 return f"{label:<12} │ {self.format_bytes(avg_val):<12} │ {self.format_bytes(med_val):<12} │ {self.format_bytes(min_val):<12} │ {self.format_bytes(max_val):<12}"
             if label == "Clients":
                 return f"{label:<12} │ {int(round(avg_val)):<12} │ {int(round(med_val)):<12} │ {int(min_val):<12} │ {int(max_val):<12}"
-            # Avg Mbps
             return f"{label:<12} │ {avg_val:<12.2f} │ {med_val:<12.2f} │ {min_val:<12.2f} │ {max_val:<12.2f} Mbps"
 
-        # Data extraction for the Metric table
-        clients_list = [int(r["clients"]) for r in valid_results if str(r["clients"]).isdigit()]
-        ups = [self.parse_to_bytes(r["up"]) for r in valid_results]
-        downs = [self.parse_to_bytes(r["down"]) for r in valid_results]
-        mbps_list = [r["mbps_val"] for r in valid_results]
-
-        # Append the calculated rows
         out.append(get_stat_row("Clients", clients_list))
         out.append(get_stat_row("Upload", ups, True))
         out.append(get_stat_row("Download", downs, True))
@@ -345,19 +359,6 @@ class StatsWorker(QThread):
 
         return main_table + "\n" + "\n".join(out)
 
-    def generate_table2(self, results):
-        # Slightly wider name column for Linux paths/long names
-        head = f"│ {'Name/IP':<20} │ {'Clients':<7} │ {'Up':<9} │ {'Down':<9} │ {'Uptime':<14} │ {'Mbps':<6} │\n"
-        sep = "├" + "─"*20 + "┼" + "─"*9 + "┼" + "─"*11 + "┼" + "─"*11 + "┼" + "─"*16 + "┼" + "─"*8 + "┤\n"
-        body = ""
-        total_c = 0
-        for r in results:
-            status = "✓" if r["success"] else "✗"
-            body += f"│ {status} {r['label'][:18]:<18} │ {r['clients']:<7} │ {r['up']:<9} │ {r['down']:<9} │ {r['uptime']:<14} │ {r['mbps']:<8} │\n"
-            if r["success"]: total_c += int(r["clients"])
-        
-        w = 83
-        return f"┌" + "─"*w + "┐\n" + head + sep + body + "└" + "─"*w + "┘\nTOTAL CLIENTS: " + str(total_c)
 
 class DeployWorker(QThread):
     log_signal = pyqtSignal(str)
