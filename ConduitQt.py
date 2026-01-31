@@ -398,9 +398,6 @@ class DeployWorker(QThread):
     def deploy_task(self, s, pub_key):
         try:
 
-#            home = os.path.expanduser("~")
-#            private_key_path = os.path.join(home, ".ssh", "id_conduit")
-
             home = os.path.expanduser("~")
             key_path = os.path.join(home, ".ssh", "id_conduit")
         
@@ -420,18 +417,6 @@ class DeployWorker(QThread):
                 conn_params["key_filename"] = [key_path]
                 conn_params["look_for_keys"] = False
                 conn_params["allow_agent"] = False
-
-            # Configure connection to NOT prompt for passwords
-#            conn_params = {
-#                "look_for_keys": True,
-#                "allow_agent": True,
-#                "key_filename": private_key_path,
-#                "timeout": 10,
-#            }
-
-            # If a password was actually typed in the GUI, add it, otherwise don't
-#            if self.params.get('password'):
-#                conn_params["password"] = self.params['password']
 
             with Connection(host=s['ip'], 
                             user=self.params['user'],
@@ -500,6 +485,9 @@ WantedBy=multi-user.target
                 conn.run("systemctl enable conduit", hide=True)
                 conn.run("systemctl start conduit", hide=True)
                 
+                if pwd:
+                    self.remove_password_signal.emit(s['ip'])
+
                 return f"[OK] {s['ip']} successfully deployed (Manual Service Config)."
         except Exception as e:
             return f"[ERROR] {s['ip']} failed: {str(e)}"
@@ -765,135 +753,6 @@ class ConduitGUI(QMainWindow):
         self.deploy_thread = DeployWorker(valid_targets, params)
         self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
         self.deploy_thread.remove_password_signal.connect(self.remove_password_from_file)
-        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
-        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
-        
-        self.deploy_thread.start()
-
-    def run_deploy3(self):
-        # 1. Get all selected targets
-        selected_targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
-        if not selected_targets:
-            QMessageBox.warning(self, "Deployment", "No servers selected.")
-            return
-
-        # 2. Validation check (Clients/BW)
-        validated = self.get_validated_inputs()
-        if not validated:
-            return 
-
-        # 3. Filter for servers that actually have a password
-        valid_targets = []
-        for s in selected_targets:
-            pwd = s.get('pass', '').strip()
-            if pwd:
-                valid_targets.append(s)
-            else:
-                self.console.appendPlainText(f"[SKIP] {s['ip']}: No root password found in servers.txt.")
-
-        # 4. If no servers survived the filter, stop here
-        if not valid_targets:
-            QMessageBox.critical(self, "Deployment Error", "None of the selected servers have a root password stored.")
-            return
-
-        # 5. Confirm deployment for the valid list
-#        warning_text = (
-#            f"Ready to deploy {len(valid_targets)} server(s).\n\n"
-#            "This will perform a fresh ROOT installation.\n"
-#            "Are you sure you want to proceed?"
-#        )
-
-        warning_text = (
-            "WARNING: PRE-EXISTING INSTALLATION DETECTED?\n\n"
-            "If these are existing Conduit servers, this process will:\n"
-            "1. STOP the current conduit service.\n"
-            "2. REMOVE the existing conduit binary.\n"
-            "3. INSTALL a fresh copy as ROOT and reset the service configuration.\n\n"
-            f"Config: {validated['clients']} Clients | {validated['bw']} Mbps\n\n"
-            "Proceed only if you have the root password for these servers.\n"
-            "Are you absolutely sure you want to proceed?"
-        )
-        
-
-        reply = QMessageBox.critical(self, "Confirm Deployment", warning_text, 
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply != QMessageBox.Yes:
-            return
-
-        # 6. Set params (password is now handled individually inside DeployWorker)
-        params = {
-            "user": "root",
-            "clients": validated['clients'], 
-            "bw": validated['bw']            
-        }
-
-        # UI Feedback
-        self.btn_deploy.setEnabled(False)
-        self.btn_deploy.setText("Deploying...")
-        
-        # 7. Start the Worker with the VALID targets only
-        self.deploy_thread = DeployWorker(valid_targets, params)
-        self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
-        self.deploy_thread.remove_password_signal.connect(self.remove_password_from_file)
-
-        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
-        self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
-        
-        self.deploy_thread.start()
-
-    def run_deploy2(self):
-        targets = [self.find_data_by_item(self.sel.item(i)) for i in range(self.sel.count())]
-        if not targets:
-            QMessageBox.warning(self, "Deployment", "No servers selected.")
-            return
-
-        # NEW: Run the validation check
-        validated = self.get_validated_inputs()
-        if not validated:
-            return  # Stop here if validation failed
-
-        # Existing Warning Message...
-        warning_text = (
-            "WARNING: PRE-EXISTING INSTALLATION DETECTED?\n\n"
-            "If these are existing Conduit servers, this process will:\n"
-            "1. STOP the current conduit service.\n"
-            "2. REMOVE the existing conduit binary.\n"
-            "3. INSTALL a fresh copy as ROOT and reset the service configuration.\n\n"
-            f"Config: {validated['clients']} Clients | {validated['bw']} Mbps\n\n"
-            "Proceed only if you have the root password for these servers.\n"
-            "Are you absolutely sure you want to proceed?"
-        )
-        
-        reply = QMessageBox.critical(self, "Confirm Fresh Deployment", warning_text, 
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-
-        if reply != QMessageBox.Yes:
-            return
-
-        pwd, ok = QInputDialog.getText(self, "Root Authentication", "Enter Root Password:", QLineEdit.Password)
-        if not ok or not pwd:
-            return
-
-        params = {
-            "password": pwd,
-            "user": "root",
-            "clients": validated['clients'], 
-            "bw": validated['bw']            
-        }
-
-        # UI Feedback
-        self.btn_deploy.setEnabled(False)
-        self.btn_deploy.setText("Deploying...")
-        
-        self.console.appendPlainText(f"\n[>>>] INITIATING FRESH ROOT DEPLOYMENT ON {len(targets)} SERVER(S)...")
-        
-        self.deploy_thread = DeployWorker(targets, params)
-        self.deploy_thread.log_signal.connect(lambda m: self.console.appendPlainText(m))
-        
-        self.deploy_thread.remove_password_signal.connect(self.remove_password_from_file)
-#        self.deploy_thread.need_password_signal.connect(self.prompt_for_missing_password)
-
-        # Reset button state when done
         self.deploy_thread.finished.connect(lambda: self.btn_deploy.setEnabled(True))
         self.deploy_thread.finished.connect(lambda: self.btn_deploy.setText("Deploy"))
         
@@ -1220,6 +1079,7 @@ class ConduitGUI(QMainWindow):
                         # Reconstruct line without the password
                         # Format: name, ip, port, user, 
                         new_line = f"{parts[0]}, {parts[1]}, {parts[2]}, {parts[3]}, "
+                        updated_lines.append(new_line)
                     else:
                         updated_lines.append(line)
 
