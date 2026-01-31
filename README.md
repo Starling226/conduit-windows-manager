@@ -21,7 +21,7 @@ This repository provides a suite of tools designed for users to deploy, monitor,
 
 ## Conduit Deployment
 ### Running Ineractive GUI
-The interactive GUI `ConduitQt.py` is a cross platform designed using PyQt5 and has been tested in Windows, Linux, and macOS Environmnets.  It is designed to do everything you need, to deploy a conduit server, manage and monitor the current status of the server. GUI is self explanatory. You can add new servers and delete your existing servers from a text file names servers.txt. To do the opration simply move one or a group of of the server to list on the right, select them and start doing the operation. When Apply Config Changes is cheked, you can press Start or restart to update the conduit parameters. The rest of the script are invidual applications you can run them for similar funtionalities in Windows.
+The interactive GUI `ConduitQt.py` is a cross platform designed using PyQt5 and has been tested in Windows, Linux, and macOS Environmnets.  It is designed to do everything you need, to deploy a conduit server, manage and monitor the current status of the server. GUI is self explanatory. You can add new servers and delete your existing servers from a text file names servers.txt. To do the opration simply move one or a group of of the server to list on the right, and start doing the operation. **Plese note every server in the right list will be used for the requested operation, no matter it has been selected or not** When Apply Config Changes is cheked, you can press Start or restart to update the conduit parameters. The rest of the script are invidual applications you can run them for similar funtionalities in Windows.
 
 ### Screenshot of the Conduit Manager Qt Application
 
@@ -98,7 +98,7 @@ Customization: To change the interval, edit CHECK_INTERVAL_SECONDS (line 14) in 
 * **Delete server:** Use Delete Server if you no longer needed.
 * **Deploy:** Select one or a number of servers in the right list and cick Deploy. This will deploy your server(s)
 * **Status:** Clicking on this dosplay the current status of your server(s), whether it is active or dead.
-* **Statistics:** This shows the network analytic
+* **Statistics:** This shows the network analytic. Clients is the average of last one hour. To get the current live connections and conduit status click on Status Button.
 * **Stop:** If you like to stop Conduit service, use this. You hardly need this.
 * **Start:** If Conduit service is not active, use this to start it.
 * **Re-Start:** If you want to chnage Conduit parameters, like Max Clients or Bandwidth, check Apply Config Changes Checkbox and click Re-start. You can also use this if yours server is not connect after couple of hours.
