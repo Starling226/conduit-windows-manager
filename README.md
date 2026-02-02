@@ -75,22 +75,11 @@ Here is the GUI interface for Conduit Management:
 *(Screenshot showing Conduit management)*
 
 ![Conduit Management Interface](screenshots/ConduitQt2.png)
-*(Screenshot showing Conduit Statistics faeture)*
+*(Screenshot showing Conduit network traffic faeture)*
 
-### Running Python Scripts
-To run any of the Python scripts simply double click on each file or run them in the command line terminal using the py command.
+### Running Python Script
+To run ConduitQT.py, simply double click on or run them in the command line terminal using the py command in Windows, or python3 in Linux or macOS.
 
-### Single Server
-run the following command to deploy to a single target. You will be prompted for the IP address and root password:
-   ```powershell
-   py deploy_conduit_single_server.py
-   ```
-### Multi Server
-For batch deployment, create a file named ip.txt in the C:\Conduit folder. Add one IP address per line. This script assumes all servers share the same root password.
-
-   ```powershell
-   py deploy_conduit_multi_server.py
-   ```
 ---
 
 ## Management
