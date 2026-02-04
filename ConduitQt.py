@@ -895,7 +895,7 @@ class ConduitGUI(QMainWindow):
         # Field 3: Log Window (The new free parameter - in minutes)
         cfg_lay.addWidget(QLabel("Log Win(min):")); 
         self.edit_window = set_fixed_entry(QLineEdit("60"))
-        self.edit_window.setToolTip("Lookback window for logs (1-60 minutes)")
+        self.edit_window.setToolTip("Lookback window for logs (1-60 minutes). Used in Status Table")
         cfg_lay.addWidget(self.edit_window)
 
 
@@ -903,6 +903,7 @@ class ConduitGUI(QMainWindow):
         cfg_lay.addSpacing(15)
         cfg_lay.addWidget(QLabel("Refresh (min):"))
         self.edit_refresh = set_fixed_entry(QLineEdit("5"))
+        self.edit_refresh.setToolTip("Refresh interval. Used in Status Table")
 #        self.edit_refresh = QLineEdit("5")
 #        self.edit_refresh.setFixedWidth(35)
         self.btn_refresh_now = QPushButton("↻") 
@@ -916,6 +917,7 @@ class ConduitGUI(QMainWindow):
 
         cfg_lay.addSpacing(10)
         self.chk_upd = QCheckBox("Apply Config Changes")
+        self.chk_upd.setToolTip("Checked and Click on Re-Start (if server is running) or Start to update the Max Clients and Bandwidth")
         cfg_lay.addWidget(self.chk_upd)
         self.rad_name = QRadioButton("Display Name")
         self.rad_ip = QRadioButton("Display IP")
@@ -1913,6 +1915,7 @@ class VisualizerWindow(QMainWindow):
         self.setWindowTitle("Conduit Analytics Visualizer")
         self.resize(1400, 850)
         self.server_list = server_list
+        self.server_list = sorted(self.server_list, key=lambda x: x['ip'])
         self.console = console
         
         self.allow_network = False # Flag to block any automatic network activity
@@ -2303,8 +2306,22 @@ class VisualizerWindow(QMainWindow):
 
     def plot_instantaneous(self, data):
         """Plots speed (deltas) using cached memory data."""
-        epochs = data['epochs']
-        if len(epochs) < 2: return
+
+        # 1. Always clear first to ensure we don't overlay data
+        self.p_clients.clear()
+        self.p_up.clear()
+        self.p_down.clear()
+
+        epochs = data.get('epochs', [])
+        
+        # 2. Check for insufficient data
+        if len(epochs) < 2:
+            self.p_up.setTitle("Up (No Data)")
+            self.p_down.setTitle("Down (No Data)")
+            # Re-enable auto-range so it's ready for the next valid click
+            for p in [self.p_clients, self.p_up, self.p_down]:
+                p.enableAutoRange()
+            return
 
         MB = 1024 * 1024
         unit = "MBps"
@@ -2334,6 +2351,21 @@ class VisualizerWindow(QMainWindow):
 
     def plot_cumulative(self, data):
         """Plots total usage using cached memory data with dynamic units."""
+        # 1. Always clear first to ensure we don't overlay data
+        self.p_clients.clear()
+        self.p_up.clear()
+        self.p_down.clear()
+
+        epochs = data.get('epochs', [])
+        
+        # 2. Check for insufficient data
+        if len(epochs) < 2:
+            self.p_up.setTitle("Up (No Data)")
+            self.p_down.setTitle("Down (No Data)")
+            # Re-enable auto-range so it's ready for the next valid click
+            for p in [self.p_clients, self.p_up, self.p_down]:
+                p.enableAutoRange()
+            return
         
         # 1. Determine the scale based on the highest value in either Up or Down
         max_up = data['ups'][-1] if data['ups'] else 0
@@ -2371,171 +2403,93 @@ class VisualizerWindow(QMainWindow):
         self.p_down.setTitle(f"Total Down ({unit})")
         
         for p in [self.p_clients, self.p_up, self.p_down]: 
-            p.enableAutoRange(axis='y')
-
-    def plot_cumulative2(self, data):
-        """Plots total usage using cached memory data."""
-        # Note: You can reuse your logic for K/M/G/T units here 
-        max_val = max(up_cumulative[-1] if up_cumulative else 0, 
-                  down_cumulative[-1] if down_cumulative else 0)
-
-        divisor, unit = self.get_scaling_factor(max_val)
-
-        # Scale the pre-calculated cumulative data
-        display_up = [x / divisor for x in up_cumulative]
-        display_down = [x / divisor for x in down_cumulative]
-
-        # using data['ups'] and data['downs']
-        self.p_clients.plot(data['epochs'], data['clients'], pen=pg.mkPen('#00d2ff', width=2), clear=True)
-        self.p_up.plot(data['epochs'], data['ups'], pen=pg.mkPen('#3aeb34', width=2), clear=True)
-        self.p_down.plot(data['epochs'], data['downs'], pen=pg.mkPen('#ff9f43', width=2), clear=True)
-        
-        for p in [self.p_clients, self.p_up, self.p_down]: p.enableAutoRange(axis='y')
-
-    def update_graphs_instantaneousFile(self, ip):
-        file_path = f"server_logs/{ip}.log"
-        if not os.path.exists(file_path): 
-            return
-
-        raw_epochs, raw_clients, raw_ups, raw_downs = [], [], [], []
-        
-        # 1. Read the raw data
-        with open(file_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) == 4:
-                    try:
-                        dt_obj = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                        raw_epochs.append(dt_obj.timestamp())
-                        raw_clients.append(int(parts[1]))
-                        raw_ups.append(int(parts[2]))
-                        raw_downs.append(int(parts[3]))
-                    except ValueError:
-                        continue
-
-        if len(raw_epochs) < 2:
-            # Not enough data to calculate a difference
-            return
-
-        # 2. Calculate the "Deltas" (The change between points)
-        # We keep epochs and clients as they are, but transform UP/DOWN
-        diff_epochs = []
-        diff_ups = []
-        diff_downs = []
-        diff_ups_mb = []
-        diff_downs_mb = []
-        MB = 1024 * 1024
-        KB = 1024
-
-        for i in range(1, len(raw_epochs)):
-            # Time difference between steps (usually 60s or 300s)
-            time_delta = raw_epochs[i] - raw_epochs[i-1]
-            
-            # Ensure we don't have negative deltas (happens if server restarts/resets stats)
-            up_delta = max(0, raw_ups[i] - raw_ups[i-1])
-            down_delta = max(0, raw_downs[i] - raw_downs[i-1])
-            
-            diff_epochs.append(raw_epochs[i])
-            if (raw_epochs[i] - raw_epochs[i-1] > 0):
-                diff_ups_mb.append((up_delta / MB) / (raw_epochs[i] - raw_epochs[i-1]))
-                diff_downs_mb.append((down_delta / MB) / (raw_epochs[i] - raw_epochs[i-1]))
-            else:
-                diff_ups_mb.append((up_delta / MB))
-                diff_downs_mb.append((down_delta / MB))
-            
-
-#            diff_ups.append(up_delta)
-#            diff_downs.append(down_delta)
-
-        # 3. Update the Plot Canvases
-        # Plot 1: Clients (No delta needed, we want to see actual count)
-        self.p_clients.plot(raw_epochs, raw_clients, pen=pg.mkPen('#00d2ff', width=2), clear=True)
-        self.p_clients.enableAutoRange(axis='y')
-        
-        # Plot 2 & 3: Traffic Deltas (Shows speed/activity per interval)
-#        self.p_up.plot(diff_epochs, diff_ups, pen=pg.mkPen('#3aeb34', width=2), clear=True)
-#        self.p_down.plot(diff_epochs, diff_downs, pen=pg.mkPen('#ff9f43', width=2), clear=True)
-
-        self.p_up.plot(diff_epochs, diff_ups_mb, pen=pg.mkPen('#3aeb34', width=2), clear=True)
-        self.p_up.enableAutoRange(axis='y')
-
-        self.p_down.plot(diff_epochs, diff_downs_mb, pen=pg.mkPen('#ff9f43', width=2), clear=True)
-        self.p_down.enableAutoRange(axis='y')
-        
-        # Update Titles to reflect the change
-        self.p_up.setTitle("Upload Activity (MBytes per Interval)", color="#3aeb34")
-        self.p_down.setTitle("Download Activity (MBytes per Interval)", color="#ff9f43")
-
-    def update_graphs_cumulativeFile(self, ip):
-        KB = 1024
-        MB = 1024 * 1024
-        GB = 1024 * 1024 * 1024
-        TB = 1024 * 1024 * 1024 * 1024
-        file_path = f"server_logs/{ip}.log"
-        if not os.path.exists(file_path): return
-
-        epochs, clients, ups, downs = [], [], [], []
-        
-        up_title = ""
-        down_title = ""
-        with open(file_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) == 4:
-                    dt_obj = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                    epochs.append(dt_obj.timestamp())
-                    clients.append(int(parts[1]))
-
-                    up = int(parts[2])
-                    down = int(parts[3])
-
-                    if up < MB:
-                        up_numerator =  KB
-                        up_title = "KBytes"
-                    elif up >= MB and up < GB:
-                       up_numerator =  MB
-                       up_title = "MBytes"
-                    elif up >= GB and up < TB:
-                       up_numerator =  GB
-                       up_title = "GBytes"                   
-                    else:
-                        up_numerator =  TB
-                        up_title = "TBytes"
-
-                    if down < MB:
-                        down_numerator =  KB
-                        down_title = "KBytes"
-                    elif down >= MB and down < GB:
-                       down_numerator =  MB
-                       down_title = "MBytes"
-                    elif down >= GB and down < TB:
-                       down_numerator =  GB                       
-                       down_title = "GBytes"
-                    else:
-                        down_numerator =  TB
-                        down_title = "TBytes"
-
-                    ups.append(int(parts[2])/up_numerator)
-                    downs.append(int(parts[3])/down_numerator)
-
-        self.p_clients.plot(epochs, clients, pen=pg.mkPen('#00d2ff', width=2), clear=True)
-        self.p_clients.enableAutoRange(axis='y')
-        self.p_up.plot(epochs, ups, pen=pg.mkPen('#3aeb34', width=2), clear=True)
-        self.p_up.enableAutoRange(axis='y')
-        self.p_down.plot(epochs, downs, pen=pg.mkPen('#ff9f43', width=2), clear=True)
-        self.p_down.enableAutoRange(axis='y')
-        self.p_up.setTitle(f"Upload Activity {up_title}", color="#3aeb34")
-        self.p_down.setTitle(f"Download Activity {down_title}", color="#ff9f43")        
+            p.enableAutoRange(axis='y')      
 
     def load_all_logs_into_memory(self):
-        """Reads every log file in the directory into the cache."""
+        """Reads logs and creates a Global Total with reboot-resilient summing."""
+
+        existing_items = self.ip_list.findItems("---.---.---.---", Qt.MatchExactly)
+
+        # If it exists, remove it
+        if existing_items:
+            for item in existing_items:
+                row = self.ip_list.row(item)
+                self.ip_list.takeItem(row)
+
         self.data_cache.clear()
-        for server in self.server_list:
+        server_list = sorted(self.server_list, key=lambda x: x['ip'])
+        
+        all_epochs = []
+        for server in server_list:
             ip = server['ip']
             file_path = f"server_logs/{ip}.log"
             if os.path.exists(file_path):
-                print(ip)
-                self.data_cache[ip] = self.parse_log_file(file_path)
+                print(f"Reading: {ip}")
+                data = self.parse_log_file(file_path)
+                self.data_cache[ip] = data
+                if data['epochs']:
+                    all_epochs.extend([data['epochs'][0], data['epochs'][-1]])
+
+        if not all_epochs:
+            return
+
+        # --- SETUP FOR GLOBAL SUMMING ---
+        start_t = int(min(all_epochs))
+        end_t = int(max(all_epochs))
+        
+        server_ips = list(self.data_cache.keys())
+        cursors = {ip: 0 for ip in server_ips}
+        
+        # Track offsets specifically for the Global Total calculation
+        # This prevents 'reboot drops' from affecting the 255.255.255.255 data.
+        up_offsets = {ip: 0 for ip in server_ips}
+        down_offsets = {ip: 0 for ip in server_ips}
+        
+        total_epochs, total_clients, total_ups, total_downs = [], [], [], []
+
+        # 3. Resample: Iterate every second
+        for current_t in range(start_t, end_t + 1):
+            s_clients = 0
+            s_ups = 0
+            s_downs = 0
+
+            for ip in server_ips:
+                data = self.data_cache[ip]
+                idx = cursors[ip]
+                
+                # Check for counter reset BEFORE moving to the next point. This happen when a server restart.
+                if idx + 1 < len(data['epochs']) and data['epochs'][idx + 1] <= current_t:
+                    # Look ahead: if next value is lower than current, it's a reboot
+                    if data['ups'][idx + 1] < data['ups'][idx]:
+                        up_offsets[ip] += data['ups'][idx]
+                        print(f"📈 [Totalizer] Up-Reset detected on {ip} at {current_t}")
+                    
+                    if data['downs'][idx + 1] < data['downs'][idx]:
+                        down_offsets[ip] += data['downs'][idx]
+                        print(f"📈 [Totalizer] Down-Reset detected on {ip} at {current_t}")
+
+                    # Now safely move the cursor forward
+                    while idx + 1 < len(data['epochs']) and data['epochs'][idx + 1] <= current_t:
+                        idx += 1
+                    cursors[ip] = idx
+                
+                # Sum the value + any accumulated offsets for this server
+                s_clients += data['clients'][idx]
+                s_ups     += (data['ups'][idx] + up_offsets[ip])
+                s_downs   += (data['downs'][idx] + down_offsets[ip])
+
+            total_epochs.append(float(current_t))
+            total_clients.append(s_clients)
+            total_ups.append(s_ups)
+            total_downs.append(s_downs)
+
+        # 5. Assign to virtual IP
+        self.data_cache["---.---.---.---"] = {
+            'epochs': total_epochs, 'clients': total_clients,
+            'ups': total_ups, 'downs': total_downs
+        }
+        self.ip_list.addItem("---.---.---.---")
+
 
     def decimate_by_download(self, raw_rows):
         """

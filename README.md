@@ -70,10 +70,10 @@ Here is the GUI interface for Conduit Management:
 *(Screenshot showing Conduit management)*
 
 ![Conduit Management Interface](screenshots/ConduitQt2.png)
-*(Screenshot showing Conduit network traffic faeture)*
+*(Screenshot showing Conduit network traffic feature)*
 
 ### Running Python Script
-To run ConduitQT.py, simply double click on or run them in the command line terminal using the py command in Windows, or python3 in Linux or macOS.
+To run ConduitQT.py, simply double click on or run them in the command line terminal using the py command in Windows `py ConduitQT.py`, or python3 in Linux or macOS `python3 ConduitQT.py`.
 
 ---
 
@@ -92,7 +92,7 @@ For the Management and Monitoring scripts to work with multiple servers, create 
 
 ## Monitoring
 
-After installation, the Psiphon network requires time for vetting and propagation. This can take anywhere from a few minutes to several hours. You can use Statistics, or watch the Status Table for real time monitoring. You can click on Visualize to see the network traffic for individual servers. The graphs are interactive, hold the mouse right button and drag the mouse up and down, left or right to zoom, unzoom, move up and down, shift to right and left. Right click on graph to reset and export the graph. Using Traffice mode in Visualizer window you can see total and interval traffic. Displayed Date Time represent the server time zone.
+After installation, the Psiphon network requires time for vetting and propagation. This can take anywhere from a few minutes to several hours. You can use Statistics, or watch the Status Table for real time monitoring. You can click on Visualize to see the network traffic for individual servers. The graphs are interactive, hold the mouse right button and drag the mouse up and down, left or right to zoom, unzoom. Hold the mouse right button to move up and down, shift to right and left. Right click on graph and click on "View All" to reset and export the save the graph. Using Traffice mode in Visualizer window you can see the total and interval traffic. Displayed Date Time represent the server time zone.
 
 ---
 
@@ -111,7 +111,7 @@ After installation, the Psiphon network requires time for vetting and propagatio
 ## Features Note
 * **Add server:** Use Add Server(+) if you have not added any server yet. You can also use this later to add further servers.
 * **Delete server:** Use Delete Server if you no longer needed.
-* **Deploy:** Select one or a number of servers in the right list and cick Deploy. This will deploy your server(s)
+* **Deploy:** Select one or a number of servers in the right panel and cick Deploy. This will deploy your server(s)
 * **Upgrade:** This upgrade the conduit cli binary in remote server to the version displayed in GUI.
 * **Status:** Clicking on this dosplay the current status of your server(s), whether it is active or dead. It also shows the last 10 connections to the server.
 * **Statistics:** This shows the network analytic. Clients is the average of last one hour. To get the current live connections and conduit status click on Status Button.
@@ -121,7 +121,7 @@ After installation, the Psiphon network requires time for vetting and propagatio
 * **Reset:** You can reset the Conduit config using this. In case if you have not received any client or you think you do not have more clients usually less than 50 for more than a day, you can reset the config. If after frew hours you have receieved any clients you can also reset the config.
 * **Display Name/IP:** Use this to siwtch the list to Server name or IP address.
 * **Max Clients:** As a rule of thumb, each core should support 50-60 clients. So if you have 4 cores you can set it to 225. This will possibly gives you up to 200 clients.
-* **Status Table:** If the selection list empty you can highlight IP addresses in Status Table and directly do oprtaions.
+* **Status Table:** If the selection panel is empty you can highlight IP addresses in Status Table and directly do oprtaions. Click column header to sort ascending or descending.
 * **Visualize:** Visualize allows you to monitor network traffic across the individual servers. When you click on Visualize, it imports the server log files from local disk. Within the Visualizer window you can click on "Reload to retrieve the data" and it starts fetching the latest logs from the servers. Please be patient, it may takes a couple of minutes to download the logs.
 
 ## Important Notes
