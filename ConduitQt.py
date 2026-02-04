@@ -257,6 +257,7 @@ class AutoStatsWorker(QThread):
                         res["up_val"] = self.format_bytes(max(0, last['u'] - first['u']))
                         res["down_val"] = self.format_bytes(max(0, last['d'] - first['d']))
                 else:
+                    res["success"] = False
                     res["clients"] = "No Data"
                     
         except Exception:
@@ -1095,7 +1096,7 @@ class ConduitGUI(QMainWindow):
 
     def open_visualizer(self):
         if not hasattr(self, 'viz_window'):
-            self.viz_window = VisualizerWindow(self.server_data)
+            self.viz_window = VisualizerWindow(self.server_data, self.console)
         self.viz_window.show()
         # Trigger initial fetch for current day
 #        self.viz_window.start_data_fetch()
@@ -1135,6 +1136,8 @@ class ConduitGUI(QMainWindow):
         COLOR_ONLINE = QColor("#27ae60")
         COLOR_OFFLINE = QColor("#c0392b")
         BG_OFFLINE = QColor("#fff5f5")
+        COLOR_NO_DATA = QColor("#d68910")
+        BG_NO_DATA = QColor("#fef9e7")
         
         total_clients = 0
         total_up_bytes = 0
@@ -1179,8 +1182,13 @@ class ConduitGUI(QMainWindow):
                         item.setForeground(QBrush(COLOR_ONLINE))
                         f = item.font(); f.setBold(True); item.setFont(f)
                 else:
-                    item.setForeground(QBrush(COLOR_OFFLINE))
-                    item.setBackground(QBrush(BG_OFFLINE))
+                    if r["clients"] == "Stopped":
+                        item.setForeground(QBrush(COLOR_OFFLINE))
+                        item.setBackground(QBrush(BG_OFFLINE))
+                    else:
+                        item.setForeground(QBrush(COLOR_NO_DATA))
+                        item.setBackground(QBrush(BG_NO_DATA))
+
                     if col > 0 and r["clients"] != "Stopped":
                         item.setText("-")
                         # Set sort value to -1 so offline servers go to bottom in desc sort
@@ -1900,11 +1908,12 @@ class ConduitGUI(QMainWindow):
             self.console.appendPlainText(f"[ERROR] Could not read file: {e}")
 
 class VisualizerWindow(QMainWindow):
-    def __init__(self, server_list):
+    def __init__(self, server_list, console):
         super().__init__()
         self.setWindowTitle("Conduit Analytics Visualizer")
         self.resize(1400, 850)
         self.server_list = server_list
+        self.console = console
         
         self.allow_network = False # Flag to block any automatic network activity
         main_widget = QWidget()
@@ -1977,12 +1986,14 @@ class VisualizerWindow(QMainWindow):
         self.edit_days.setFixedWidth(60)
         bottom_lay.addWidget(self.edit_days)
         
+       
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedWidth(300)
         self.progress_bar.setVisible(False)  # Hidden until "Reload" is clicked
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setAlignment(Qt.AlignCenter)
         bottom_lay.addWidget(self.progress_bar)
+        
 
         self.btn_reload = QPushButton("Reload to retrieve the data")
         self.btn_reload.setFixedWidth(200)
@@ -2037,6 +2048,7 @@ class VisualizerWindow(QMainWindow):
         self.data_cache = {} # The central memory store
 
         self.load_all_logs_into_memory()
+        self.console.appendPlainText(f"Importing data finished.")        
         self.ip_list.currentItemChanged.connect(self.refresh_current_plot)
         self.check_local_data_on_startup()        
         self._is_initializing = False     
@@ -2127,8 +2139,9 @@ class VisualizerWindow(QMainWindow):
         
         days = self.edit_days.text()
         self.btn_reload.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
+#        self.progress_bar.setVisible(True)
+#        self.progress_bar.setValue(0)
+#        self.progress_bar.setFormat(f"Downloading")
         self.status_label.setText("Retrieving data started...")
         # This is where the actual 'Downloading' happens
         self.worker = HistoryWorker(self.server_list, days)
@@ -2201,7 +2214,7 @@ class VisualizerWindow(QMainWindow):
         # 2. Load the newly cleaned data into the Memory Cache
         self.status_label.setText("Importing data...")
         self.load_all_logs_into_memory()
-    
+        self.console.appendPlainText(f"Importing data finished.")
         # 3. Refresh the GUI
         self.progress_bar.setVisible(False)
         self.btn_reload.setEnabled(True)
@@ -2270,338 +2283,6 @@ class VisualizerWindow(QMainWindow):
             # GET the dictionary from cache
             if ip in self.data_cache:
                 self.plot_instantaneous(self.data_cache[ip])
-
-    def update_graphs_avg_median(self, ip):
-        file_path = f"server_logs/{ip}.log"
-        if not os.path.exists(file_path): 
-            return
-
-        # --- DATA LOADING ---
-        raw_data = [] 
-        try:
-            with open(file_path, 'r') as f:
-                for line in f:
-                    parts = line.strip().split('\t')
-                    if len(parts) == 4:
-                        dt_obj = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                        raw_data.append((dt_obj.timestamp(), int(parts[1]), int(parts[2]), int(parts[3])))
-        except Exception: return
-
-        if len(raw_data) < 3: return
-
-        MB = 1024 * 1024
-        
-        # --- STEP 1: Fast Delta Calculation ---
-        raw_ts = [d[0] for d in raw_data[1:]]
-        raw_cl = [d[1] for d in raw_data[1:]]
-        # Pre-calculating deltas for the median filter
-        u_deltas = [max(0, raw_data[i][2] - raw_data[i-1][2]) / MB for i in range(1, len(raw_data))]
-        d_deltas = [max(0, raw_data[i][3] - raw_data[i-1][3]) / MB for i in range(1, len(raw_data))]
-
-# --- THE 10x SPURIOUS RULE FILTER ---
-        def apply_spurious_filter_3(data):
-            size = len(data)
-            if size < 3: return data
-            res = [data[0]] 
-            
-            for i in range(1, size - 1):
-                prev, curr, next_pt = data[i-1], data[i], data[i+1]
-                
-                # Rule: Is 'curr' 10x larger than both neighbors?
-                # We use max(0.1, ...) to avoid division by zero errors
-                ratio_prev = curr / max(0.001, prev)
-                ratio_next = curr / max(0.001, next_pt)
-                
-                if ratio_prev > 10 and ratio_next > 10:
-                    # Spurious detected: Use median (middle value of sorted triplet)
-                    window = sorted([prev, curr, next_pt])
-                    res.append(window[1])
-                else:
-                    # Not a spurious peak: Keep the original value
-                    res.append(curr)
-                    
-            res.append(data[-1])
-            return res
-
-        # --- STEP 2: The fast_median logic ---
-        # Optimized for a 3-point window without sorting
-        def fast_median_3(data):
-            size = len(data)
-            if size < 3: return data
-            # Initialize with the first point
-            res = [data[0]] 
-            
-            # Manual 3-point median (avoids list allocation and sort overhead)
-            for i in range(1, size - 1):
-                a, b, c = data[i-1], data[i], data[i+1]
-                # Finding the middle value via min/max logic
-                median = max(min(a, b), min(max(a, b), c))
-                res.append(median)
-                
-            res.append(data[-1]) # Keep the last point
-            return res
-
-# Apply the rule to raw deltas before averaging
-#        clean_u = apply_spurious_filter_3(u_deltas)
-#        clean_d = apply_spurious_filter_3(d_deltas)
-
-        clean_u = fast_median_3(u_deltas)
-        clean_d = fast_median_3(d_deltas)
-
-        # --- STEP 3: Resample (1-Minute Mean) ---
-        res_t, res_c, res_u, res_d = [], [], [], []
-        current_min = int(raw_ts[0] // 60)
-        t_c, t_u, t_d = [], [], []
-        
-        for i in range(len(raw_ts)):
-            this_min = int(raw_ts[i] // 60)
-            if this_min == current_min:
-                t_c.append(raw_cl[i])
-                t_u.append(clean_u[i])
-                t_d.append(clean_d[i])
-            else:
-                # Store averaged result
-                res_t.append(current_min * 60)
-                res_c.append(sum(t_c)/len(t_c))
-                res_u.append(sum(t_u)/len(t_u))
-                res_d.append(sum(t_d)/len(t_d))
-                # Reset for next minute
-                current_min = this_min
-                t_c, t_u, t_d = [raw_cl[i]], [clean_u[i]], [clean_d[i]]
-        
-        # Cleanup final bucket
-        if t_c:
-            res_t.append(current_min * 60)
-            res_c.append(sum(t_c)/len(t_c))
-            res_u.append(sum(t_u)/len(t_u))
-            res_d.append(sum(t_d)/len(t_d))
-
-        # --- STEP 4: Render to Canvas ---
-        self.p_clients.plot(res_t, res_c, pen=pg.mkPen('#00d2ff', width=1.5), clear=True)
-        self.p_up.plot(res_t, res_u, pen=pg.mkPen('#3aeb34', width=1.5), clear=True)
-        self.p_down.plot(res_t, res_d, pen=pg.mkPen('#ff9f43', width=1.5), clear=True)
-
-    def update_graphs_slice(self, ip):
-        file_path = f"server_logs/{ip}.log"
-        if not os.path.exists(file_path): 
-            return
-
-        raw_data = [] # List of tuples: (timestamp, clients, up_bytes, down_bytes)
-        try:
-            with open(file_path, 'r') as f:
-                for line in f:
-                    parts = line.strip().split('\t')
-                    if len(parts) == 4:
-                        dt_obj = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                        raw_data.append((dt_obj.timestamp(), int(parts[1]), int(parts[2]), int(parts[3])))
-        except Exception as e:
-            print(f"Read error: {e}")
-            return
-
-        if len(raw_data) < 3: return
-
-        MB = 1024 * 1024
-        
-        # --- STEP 1: Calculate Raw Deltas ---
-        # We extract raw per-second (or per-log) changes
-        raw_ts = [d[0] for d in raw_data[1:]]
-        raw_cl = [d[1] for d in raw_data[1:]]
-        raw_u  = [max(0, raw_data[i][2] - raw_data[i-1][2]) / MB for i in range(1, len(raw_data))]
-        raw_d  = [max(0, raw_data[i][3] - raw_data[i-1][3]) / MB for i in range(1, len(raw_data))]
-
-        # --- STEP 2: Median Filter (Raw Level) ---
-        # This removes 1-2 second "spikes" or "glitches" before they touch the average
-        def apply_median_3(data):
-            if len(data) < 3: return data
-            filt = [data[0]]
-            for i in range(1, len(data)-1):
-                # Sort 3 points and take the middle one
-                window = sorted([data[i-1], data[i], data[i+1]])
-                filt.append(window[1])
-            filt.append(data[-1])
-            return filt
-
-        clean_u = apply_median_3(raw_u)
-        clean_d = apply_median_3(raw_d)
-
-        # --- STEP 3: Resample to 1-Minute Averages ---
-        # Group the "cleaned" raw data into 1-minute buckets
-        res_t, res_c, res_u, res_d = [], [], [], []
-        
-        if raw_ts:
-            current_min = int(raw_ts[0] // 60)
-            t_c, t_u, t_d = [], [], []
-            
-            for i in range(len(raw_ts)):
-                this_min = int(raw_ts[i] // 60)
-                if this_min == current_min:
-                    t_c.append(raw_cl[i])
-                    t_u.append(clean_u[i])
-                    t_d.append(clean_d[i])
-                else:
-                    res_t.append(current_min * 60)
-                    res_c.append(sum(t_c)/len(t_c))
-                    res_u.append(sum(t_u)/len(t_u))
-                    res_d.append(sum(t_d)/len(t_d))
-                    current_min = this_min
-                    t_c, t_u, t_d = [raw_cl[i]], [clean_u[i]], [clean_d[i]]
-            
-            # Finalize last bucket
-            if t_c:
-                res_t.append(current_min * 60)
-                res_c.append(sum(t_c)/len(t_c))
-                res_u.append(sum(t_u)/len(t_u))
-                res_d.append(sum(t_d)/len(t_d))
-
-        # --- STEP 4: Plotting ---
-        self.p_clients.plot(res_t, res_c, pen=pg.mkPen('#00d2ff', width=2), clear=True)
-        self.p_up.plot(res_t, res_u, pen=pg.mkPen('#3aeb34', width=2), clear=True)
-        self.p_down.plot(res_t, res_d, pen=pg.mkPen('#ff9f43', width=2), clear=True)
-        
-        self.p_up.setTitle("Upload Traffic (MB/min - Hybrid Filter)", color="#3aeb34")
-        self.p_down.setTitle("Download Traffic (MB/min - Hybrid Filter)", color="#ff9f43")
-
-    def update_graphs_1_min_avg_median(self, ip):
-        file_path = f"server_logs/{ip}.log"
-        if not os.path.exists(file_path): 
-            return
-
-        raw_data = []
-        with open(file_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) == 4:
-                    try:
-                        dt_obj = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                        raw_data.append((dt_obj.timestamp(), int(parts[1]), int(parts[2]), int(parts[3])))
-                    except ValueError:
-                        continue
-
-        if len(raw_data) < 2:
-            return
-
-        # 1. Calculate Deltas and Resample to 1-minute averages first
-        MB = 1024 * 1024
-        deltas = []
-        for i in range(1, len(raw_data)):
-            t = raw_data[i][0]
-            c = raw_data[i][1]
-            u_delta = max(0, raw_data[i][2] - raw_data[i-1][2]) / MB
-            d_delta = max(0, raw_data[i][3] - raw_data[i-1][3]) / MB
-            deltas.append({'t': t, 'c': c, 'u': u_delta, 'd': d_delta})
-
-        # Resampling logic (1-minute buckets)
-        res_t, res_c, res_u, res_d = [], [], [], []
-        if deltas:
-            current_min = int(deltas[0]['t'] // 60)
-            t_c, t_u, t_d = [], [], []
-            for d in deltas:
-                this_min = int(d['t'] // 60)
-                if this_min == current_min:
-                    t_c.append(d['c']); t_u.append(d['u']); t_d.append(d['d'])
-                else:
-                    res_t.append(current_min * 60)
-                    res_c.append(sum(t_c)/len(t_c))
-                    res_u.append(sum(t_u)/len(t_u))
-                    res_d.append(sum(t_d)/len(t_d))
-                    current_min = this_min
-                    t_c, t_u, t_d = [d['c']], [d['u']], [d['d']]
-
-        # 2. Apply 3-Point Median Filter to Up and Down
-        def apply_median_3(data):
-            if len(data) < 3: return data
-            filtered = [data[0]] # Keep first point
-            for i in range(1, len(data) - 1):
-                # Pick the middle value of the 3-point window
-                window = sorted([data[i-1], data[i], data[i+1]])
-                filtered.append(window[1]) 
-            filtered.append(data[-1]) # Keep last point
-            return filtered
-
-        filtered_u = apply_median_3(res_u)
-        filtered_d = apply_median_3(res_d)
-
-        # 3. Plotting
-        self.p_clients.plot(res_t, res_c, pen=pg.mkPen('#00d2ff', width=2), clear=True)
-        
-        # Plot filtered traffic
-        self.p_up.plot(res_t, filtered_u, pen=pg.mkPen('#3aeb34', width=2), clear=True)
-        self.p_down.plot(res_t, filtered_d, pen=pg.mkPen('#ff9f43', width=2), clear=True)
-        
-        self.p_up.setTitle("Filtered Upload (MB/min - Median 3)", color="#3aeb34")
-        self.p_down.setTitle("Filtered Download (MB/min - Median 3)", color="#ff9f43")
-
-    def update_graphs_avg(self, ip):
-        file_path = f"server_logs/{ip}.log"
-        if not os.path.exists(file_path): 
-            return
-
-        raw_data = []
-        with open(file_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) == 4:
-                    try:
-                        dt_obj = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                        # (timestamp, clients, up_bytes, down_bytes)
-                        raw_data.append((dt_obj.timestamp(), int(parts[1]), int(parts[2]), int(parts[3])))
-                    except ValueError:
-                        continue
-
-        if len(raw_data) < 2:
-            return
-
-        # 1. Calculate Deltas first
-        MB = 1024 * 1024
-        deltas = []
-        for i in range(1, len(raw_data)):
-            t = raw_data[i][0]
-            c = raw_data[i][1]
-            u_delta = max(0, raw_data[i][2] - raw_data[i-1][2]) / MB
-            d_delta = max(0, raw_data[i][3] - raw_data[i-1][3]) / MB
-            deltas.append({'t': t, 'c': c, 'u': u_delta, 'd': d_delta})
-
-        # 2. Resample / Average per Minute
-        # We group by floor(timestamp / 60)
-        resampled_t, resampled_c, resampled_u, resampled_d = [], [], [], []
-        
-        if deltas:
-            current_min = int(deltas[0]['t'] // 60)
-            temp_c, temp_u, temp_d = [], [], []
-
-            for d in deltas:
-                this_min = int(d['t'] // 60)
-                
-                if this_min == current_min:
-                    temp_c.append(d['c'])
-                    temp_u.append(d['u'])
-                    temp_d.append(d['d'])
-                else:
-                    # Save average of the previous minute
-                    resampled_t.append(current_min * 60)
-                    resampled_c.append(sum(temp_c) / len(temp_c))
-                    resampled_u.append(sum(temp_u) / len(temp_u))
-                    resampled_d.append(sum(temp_d) / len(temp_d))
-                    
-                    # Start new minute
-                    current_min = this_min
-                    temp_c, temp_u, temp_d = [d['c']], [d['u']], [d['d']]
-            
-            # Don't forget the last pending minute
-            if temp_c:
-                resampled_t.append(current_min * 60)
-                resampled_c.append(sum(temp_c) / len(temp_c))
-                resampled_u.append(sum(temp_u) / len(temp_u))
-                resampled_d.append(sum(temp_d) / len(temp_d))
-
-        # 3. Update the Plot Canvases
-        self.p_clients.plot(resampled_t, resampled_c, pen=pg.mkPen('#00d2ff', width=2), clear=True)
-        self.p_up.plot(resampled_t, resampled_u, pen=pg.mkPen('#3aeb34', width=2), clear=True)
-        self.p_down.plot(resampled_t, resampled_d, pen=pg.mkPen('#ff9f43', width=2), clear=True)
-        
-        # Add labels to make it clear it's averaged
-        self.p_up.setTitle("Avg Upload Activity (MB/min)", color="#3aeb34")
-        self.p_down.setTitle("Avg Download Activity (MB/min)", color="#ff9f43")
 
     def get_dynamic_scale(self, max_value):
         KB = 1024
@@ -2941,23 +2622,6 @@ class VisualizerWindow(QMainWindow):
         except Exception as e:
             print(f"Error parsing {file_path}: {e}")
             return {'epochs': [], 'clients': [], 'ups': [], 'downs': []}
-
-    def parse_log_file2(self, file_path):
-        """Converts raw disk text into high-speed memory arrays."""
-        data = {'epochs': [], 'clients': [], 'ups': [], 'downs': []}
-        try:
-            with open(file_path, 'r') as f:
-                for line in f:
-                    parts = line.strip().split('\t')
-                    if len(parts) == 4:
-                        dt = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                        data['epochs'].append(dt.timestamp())
-                        data['clients'].append(int(parts[1]))
-                        data['ups'].append(int(parts[2]))
-                        data['downs'].append(int(parts[3]))
-        except Exception as e:
-            print(f"Error parsing {file_path}: {e}")
-        return data
 
     def load_local_data(self, ip):
         """Reads logs from disk, updates the timestamp label (RED), and plots."""

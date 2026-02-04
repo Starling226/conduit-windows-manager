@@ -1,16 +1,12 @@
-# Psiphon Conduit Cross Platform Setup for Windows , Linux, and macOS
-
-This repository provides a suite of tools designed for users to deploy, monitor, and manage **Psiphon Conduit** on remote Linux servers.
+# Psiphon Conduit: Cross-Platform Remote Management
+## Deploy, monitor, and manage Psiphon Conduit across Windows, Linux, and macOS.
+This repository features an interactive application designed to streamline the deployment and real-time monitoring of Psiphon Conduit on remote Linux servers. Effortlessly manage everything from a single instance to hundreds of servers with minimal overhead.
 
 # 🛡️ Conduit Manager
-
-A cross-platform management suite for automated conduit deployment.
+**Download:** 🚀 Get Started: Click the button below to download the latest version as a ZIP file, or clone the repository directly.
 
 [ ![Download ZIP](https://img.shields.io/badge/-%3C%3E%20Code%20(ZIP)-2ea44f?style=for-the-badge&logo=github&logoColor=white) ](https://github.com/Starling226/conduit-manager/archive/refs/heads/main.zip)
 
-> **Note:** For the most stable experience, click the green button above to download the repository, extract it, and run `ConduitQt.py`.
-# My Project
-1. **Download:** 🚀 Get Started: Click the button above to download the latest version as a ZIP file, or clone the repository directly.. 
 
 ## Download and Preparations
 1. **Python Instalation:** Please visist https://www.python.org/downloads/ and install the latest python
@@ -46,16 +42,15 @@ The `ConduitQt.py` application is a robust, multi-threaded, cross-platform manag
 
 ### 🛠️ How to Use
 
-1.  **Import**: Load your `servers.txt` to populate the available server list.
+1.  **Import**: Load your `servers.txt` to populate the available server list. Scroll down to Management section to see how to create servers.txt.
 2.  **Target**: Move the desired servers from the left panel to the right-hand (Target) panel.
-3.  **Execute**: Choose your operation (e.g., *Fresh Deployment*, *Reset*, or *Stop*).
+3.  **Execute**: Choose your operation (e.g., *Deploy*, *Reset*, *Stop*, etc.). If you have deployed your servers click on refresh button to immediatly update your servers status table.
 4.  **Monitor**: Follow real-time progress and logs in the integrated console output.
 
 ---
 
 ### 📂 Component Overview
 
-While `ConduitQt.py` is the primary cross-platform tool, the repository includes specialized scripts for specific environments:
 
 | Component | Platform | Primary Use Case |
 | :--- | :--- | :--- |
@@ -87,7 +82,7 @@ To run ConduitQT.py, simply double click on or run them in the command line term
 The Start, Stop, Re-Start, Reset, Status, Upgrade, Deploy allows you to manage your servers efficiently. Sometime even after few hours you have no clients; in that case, you might reset the conduit to get fresh keys and get clients.
 
 ### Using servers.txt
-For the Management and Monitoring scripts to work with multiple servers, create a `servers.txt` file in the same directory that you run any of the scripts. Default port is 22. Upon successfull deployment the ssh public key will be injected to the server and root password will be removed from servers.txt. You must add root server for deployment if you plan to deploy mutiple servers simultaneouly. If you plan to deploy single server through the GUI applcation you will be prompted to enter the root password. Any comunication with the server will be perfomred using the ssh keys after successfull deployment.
+For the Management and Monitoring scripts to work with multiple servers, create a `servers.txt` file in the same directory that you run any of the scripts. Upon successfull deployment the ssh public key will be injected to the server and root password will be removed from servers.txt. You must add root server for deployment if you plan to deploy mutiple servers simultaneouly. If you plan to deploy single server through the GUI applcation you will be prompted to enter the root password. Any comunication with the server will be perfomred using the ssh keys after successfull deployment. Default port is 22.
 
 **Format:**
 `name,hostname,port,username`. Do not add this header to servers.txt.
@@ -97,7 +92,7 @@ For the Management and Monitoring scripts to work with multiple servers, create 
 
 ## Monitoring
 
-After installation, the Psiphon network requires time for vetting and propagation. This can take anywhere from a few minutes to several hours. You can use Statistics, or watch the STatus Table fro real time monitoring. You can click on Visualize to see the network traffic for individual servers. The graphs are interactive, you can zoom, unzoom, move up and down, shift to right and left. Right click on graph to reset and export the graph.
+After installation, the Psiphon network requires time for vetting and propagation. This can take anywhere from a few minutes to several hours. You can use Statistics, or watch the Status Table for real time monitoring. You can click on Visualize to see the network traffic for individual servers. The graphs are interactive, hold the mouse right button and drag the mouse up and down, left or right to zoom, unzoom, move up and down, shift to right and left. Right click on graph to reset and export the graph. Using Traffice mode in Visualizer window you can see total and interval traffic. Displayed Date Time represent the server time zone.
 
 ---
 
@@ -127,7 +122,7 @@ After installation, the Psiphon network requires time for vetting and propagatio
 * **Display Name/IP:** Use this to siwtch the list to Server name or IP address.
 * **Max Clients:** As a rule of thumb, each core should support 50-60 clients. So if you have 4 cores you can set it to 225. This will possibly gives you up to 200 clients.
 * **Status Table:** If the selection list empty you can highlight IP addresses in Status Table and directly do oprtaions.
-* **Visualize:** Visualize allows you to monitor network traffic across the server.
+* **Visualize:** Visualize allows you to monitor network traffic across the individual servers. When you click on Visualize, it imports the server log files from local disk. Within the Visualizer window you can click on "Reload to retrieve the data" and it starts fetching the latest logs from the servers. Please be patient, it may takes a couple of minutes to download the logs.
 
 ## Important Notes
 * **SSH Port:** These scripts use the standard **SSH Port 22** for all connections.
