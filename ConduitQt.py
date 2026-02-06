@@ -2280,8 +2280,7 @@ class VisualizerWindow(QMainWindow):
                         # 2. Format data
                         dt = dt_raw.replace('T', ' ')
                         up_bytes = self.parse_to_bytes(up_str)
-                        down_bytes = self.parse_to_bytes(down_str)
-                    
+                        down_bytes = self.parse_to_bytes(down_str)                    
                         # 3. Write standardized columns
                         f.write(f"{dt}\t{clients}\t{up_bytes}\t{down_bytes}\n")
                         valid_lines += 1
@@ -2745,6 +2744,15 @@ class VisualizerReportWindow(QMainWindow):
 
 #        self.radio_instant.clicked.connect(self.refresh_current_plot)
 
+        self.lbl_total_clients = QLabel("Clients: 0")
+        self.lbl_total_up = QLabel("Up: 0 B")
+        self.lbl_total_down = QLabel("Down: 0 B")
+
+        for lbl in [self.lbl_total_clients, self.lbl_total_up, self.lbl_total_down]:
+            lbl.setStyleSheet("font-weight: bold; color: #2c3e50;")
+            lbl.setFixedWidth(180)
+            bottom_lay.addWidget(lbl)
+
         self.status_label = QLabel("Last Sync: Never")
         # Use Consolas for that "Conduit Version" terminal look
         self.status_label.setFont(QFont("Consolas", 10, QFont.Bold))
@@ -2807,7 +2815,7 @@ class VisualizerReportWindow(QMainWindow):
                 
                 # 4. Explicitly call the plot based on radio state
 
-                self.plot_cumulative(data, ip)
+                self.plot_report_interval(data, ip)
                 
                 # 6. Force the axes to find the data points
                 self.p_clients.enableAutoRange()
@@ -2876,8 +2884,10 @@ class VisualizerReportWindow(QMainWindow):
                     
                         # 2. Format data
                         dt = dt_raw.replace('T', ' ')
-                        up_bytes = self.parse_to_bytes(up_str)
-                        down_bytes = self.parse_to_bytes(down_str)
+#                        up_bytes = self.parse_to_bytes(up_str)
+#                        down_bytes = self.parse_to_bytes(down_str)
+                        up_bytes = int(up_str)
+                        down_bytes = int(down_str)
                     
                         # 3. Write standardized columns
                         f.write(f"{dt}\t{clients}\t{up_bytes}\t{down_bytes}\n")
@@ -2932,7 +2942,7 @@ class VisualizerReportWindow(QMainWindow):
 
             # 2. PASS THE DICTIONARY, NOT THE IP STRING
 
-            self.plot_cumulative(data_obj, ip)   # Pass the object {}
+            self.plot_report_interval(data_obj, ip)   # Pass the object {}
 
         else:
             self.status_label.setText("Last Sync: No Data in Cache")
@@ -2947,7 +2957,7 @@ class VisualizerReportWindow(QMainWindow):
         if ip in self.data_cache:
             data_obj = self.data_cache[ip]
                         
-            self.plot_cumulative(data_obj, ip)
+            self.plot_report_interval(data_obj, ip)
 
     def get_dynamic_scale(self, max_value):
         KB = 1024
@@ -2966,7 +2976,25 @@ class VisualizerReportWindow(QMainWindow):
         else:
             return TB, "TB"
 
-    def plot_cumulative(self, data, ip):
+    def get_scale_unit(self, max_val):
+        KB = 1024
+        MB = 1024 ** 2
+        GB = 1024 ** 3
+        TB = 1024 ** 4
+
+        if max_val >= KB and max_val < MB:
+            divisor, unit = KB, "KBytes"
+        elif max_val >= MB and max_val < GB:
+            divisor, unit = MB, "MBytes"
+        elif max_val >= GB and max_val < TB:
+            divisor, unit = GB, "GBytes"
+        elif max_val >= TB:
+            divisor, unit = TB, "TBytes"
+        else:
+            divisor, unit = 1, "Bytes"
+        return divisor, unit
+
+    def plot_report_interval(self, data, ip):
         """Plots total usage using cached memory data with dynamic units."""
         # 1. Always clear first to ensure we don't overlay data
         self.p_clients.clear()
@@ -2985,16 +3013,18 @@ class VisualizerReportWindow(QMainWindow):
             return
         
         # 1. Determine the scale based on the highest value in either Up or Down
-        max_up = data['ups'][-1] if data['ups'] else 0
-        max_down = data['downs'][-1] if data['downs'] else 0
+        max_up = max(data['ups']) if data['ups'] else 0
+        max_down = max(data['downs']) if data['downs'] else 0
         max_val = max(max_up, max_down)
-
+        
         # 2. Apply your specific rules
         KB = 1024
         MB = 1024 * 1024
         GB = 1024 * 1024 * 1024
         TB = 1024 * 1024 * 1024 * 1024
 
+        divisor, unit = self.get_scale_unit(max_val)
+        '''
         if max_val >= KB and max_val < MB:
             divisor, unit = KB, "KBytes"
         elif max_val >= MB and max_val < GB:
@@ -3005,6 +3035,11 @@ class VisualizerReportWindow(QMainWindow):
             divisor, unit = TB, "TBytes"
         else:
             divisor, unit = 1, "Bytes"
+        '''
+
+        max_clients = max(data['clients'])
+        total_up_bytes = sum(data['ups'])
+        total_down_bytes = sum(data['downs'])
 
         # 3. Scale the data arrays
         scaled_ups = [x / divisor for x in data['ups']]
@@ -3028,7 +3063,15 @@ class VisualizerReportWindow(QMainWindow):
         for p in [self.p_clients, self.p_up, self.p_down]: 
             p.enableAutoRange(axis='y')      
 
+        divisor_up, unit_up = self.get_scale_unit(total_up_bytes,)
+        divisor_down, unit_down = self.get_scale_unit(total_down_bytes)
+
+        self.lbl_total_clients.setText(f"Max Clients: {max_clients}")
+        self.lbl_total_up.setText(f"Total Up: {total_up_bytes/divisor_up:.1f} {unit_up}")
+        self.lbl_total_down.setText(f"Total Down: {total_down_bytes/divisor_down:.1f} {unit_down}") 
+
     def load_all_logs_into_memory(self):
+
         """Reads logs and creates a Global Total with reboot-resilient summing."""
 
         existing_items = self.ip_list.findItems("---.---.---.---", Qt.MatchExactly)
@@ -3052,6 +3095,7 @@ class VisualizerReportWindow(QMainWindow):
                 self.data_cache[ip] = data
                 if data['epochs']:
                     all_epochs.extend([data['epochs'][0], data['epochs'][-1]])
+#        return
 
         if not all_epochs:
             return
@@ -3071,25 +3115,29 @@ class VisualizerReportWindow(QMainWindow):
         total_epochs, total_clients, total_ups, total_downs = [], [], [], []
 
         # 3. Resample: Iterate every second
-        for current_t in range(start_t, end_t + 1):
+        for current_t in range(start_t, end_t + 1, 3600):
             s_clients = 0
             s_ups = 0
             s_downs = 0
 
             for ip in server_ips:
                 data = self.data_cache[ip]
+                if not data['clients']:
+                    continue
+
                 idx = cursors[ip]
                 
                 # Check for counter reset BEFORE moving to the next point. This happen when a server restart.
                 if idx + 1 < len(data['epochs']) and data['epochs'][idx + 1] <= current_t:
                     # Look ahead: if next value is lower than current, it's a reboot
-                    if data['ups'][idx + 1] < data['ups'][idx]:
-                        up_offsets[ip] += data['ups'][idx]
-                        print(f"📈 [Totalizer] Up-Reset detected on {ip} at {current_t}")
+                    #if data['ups'][idx + 1] < data['ups'][idx]:
+#                    up_offsets[ip] += data['ups'][idx]
+                    #    print(f"📈 [Totalizer] Up-Reset detected on {ip} at {current_t}")
                     
-                    if data['downs'][idx + 1] < data['downs'][idx]:
-                        down_offsets[ip] += data['downs'][idx]
-                        print(f"📈 [Totalizer] Down-Reset detected on {ip} at {current_t}")
+                    #if data['downs'][idx + 1] < data['downs'][idx]:
+#                    down_offsets[ip] += data['downs'][idx]
+                    #    print(f"📈 [Totalizer] Down-Reset detected on {ip} at {current_t}")
+
 
                     # Now safely move the cursor forward
                     while idx + 1 < len(data['epochs']) and data['epochs'][idx + 1] <= current_t:
@@ -3097,9 +3145,12 @@ class VisualizerReportWindow(QMainWindow):
                     cursors[ip] = idx
                 
                 # Sum the value + any accumulated offsets for this server
+
                 s_clients += data['clients'][idx]
-                s_ups     += (data['ups'][idx] + up_offsets[ip])
-                s_downs   += (data['downs'][idx] + down_offsets[ip])
+                # s_ups     += (data['ups'][idx] + up_offsets[ip])
+                s_ups     += data['ups'][idx]
+                # s_downs   += (data['downs'][idx] + down_offsets[ip])
+                s_downs   += data['downs'][idx]
 
             total_epochs.append(float(current_t))
             total_clients.append(s_clients)
@@ -3131,9 +3182,9 @@ class VisualizerReportWindow(QMainWindow):
                 # row is (datetime_obj, avg_clients, avg_ups, anchor_down)
                 last_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
                 data['epochs'].append(last_ts.timestamp())
-                data['clients'].append(row[1])
-                data['ups'].append(row[2])
-                data['downs'].append(row[3])
+                data['clients'].append(int(row[1]))
+                data['ups'].append(int(row[2]))
+                data['downs'].append(int(row[3]))
                 
             return data
 
