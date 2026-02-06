@@ -122,7 +122,7 @@ After installation, the Psiphon network requires time for vetting and propagatio
 * **Display Name/IP:** Use this to siwtch the list to Server name or IP address.
 * **Max Clients:** As a rule of thumb, each core should support 50-60 clients. So if you have 4 cores you can set it to 225. This will possibly gives you up to 200 clients.
 * **Status Table:** If the selection panel is empty you can highlight IP addresses in Status Table and directly do oprtaions. Click column header to sort ascending or descending.
-* **Traffic:** Traffic allows you to monitor network traffic across the individual servers. When you click on Traffic, it imports the server log files from local disk. Within the Visualizer window you can click on "Reload to
+* **Traffic:** Traffic allows you to monitor network traffic across the individual servers. When you click on Traffic, it imports the server log files from local disk. Within the Visualizer window you can click on "Reload to retrieve the data" and it starts fetching the latest conduit logs from the servers. Please be patient, it may takes a couple of minutes to download the logs.
 * **Report:** Report allows you to download and display conduit hourly network traffic across the individual servers. When you click on Traffic, it imports the server hourly log files from local disk. Within the Visualizer window you can click on "Reload to retrieve the data" and it starts fetching the latest hourly logs from the servers. Please be patient, it may takes a couple of minutes to download the logs.
 
 ## Important Notes
