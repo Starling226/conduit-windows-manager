@@ -35,7 +35,7 @@ if platform.system() == "Darwin":  # Darwin is the internal name for macOS
     print("[INFO] macOS High-DPI Scaling Enabled")
 
 CONDUIT_URL = "https://github.com/ssmirr/conduit/releases/download/2fd31d4/conduit-linux-amd64"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 
 class LogFetcherSignals(QObject):
     """Signals for individual thread status."""
